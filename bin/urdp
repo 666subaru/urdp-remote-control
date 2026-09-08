@@ -1,0 +1,30 @@
+#!/bin/sh
+# Launcher for urdp.
+#
+# Picks an interpreter that actually has PyQt6: a pyenv/conda "python3" earlier
+# in PATH usually does not, while the distribution's does.
+
+set -e
+
+target=$0
+while [ -L "$target" ]; do
+    dir=$(cd -P "$(dirname "$target")" && pwd)
+    target=$(readlink "$target")
+    case $target in
+        /*) ;;
+        *) target="$dir/$target" ;;
+    esac
+done
+root=$(cd -P "$(dirname "$target")/.." && pwd)
+
+for candidate in "${URDP_PYTHON:-}" python3 /usr/bin/python3 /usr/bin/python; do
+    [ -n "$candidate" ] || continue
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import PyQt6.QtWidgets' >/dev/null 2>&1; then
+        PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec "$candidate" -m urdp "$@"
+    fi
+done
+
+echo "urdp: PyQt6 kurulu bir Python bulunamadı." >&2
+echo "Arch/CachyOS: sudo pacman -S python-pyqt6" >&2
+exit 1

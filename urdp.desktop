@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=URDP Remote Control
+GenericName=Remote Desktop Client
+GenericName[tr]=Uzak Masaüstü İstemcisi
+GenericName[de]=Remotedesktop-Client
+GenericName[es]=Cliente de Escritorio remoto
+GenericName[fr]=Client Bureau à distance
+GenericName[ru]=Клиент удалённого рабочего стола
+Comment=Connect to Windows RDP servers with multi-monitor support
+Comment[tr]=Windows RDP sunucularına çift monitör desteğiyle bağlanın
+Comment[de]=Mit Windows-RDP-Servern verbinden, mit Unterstützung für mehrere Monitore
+Comment[es]=Conéctese a servidores RDP de Windows con soporte multimonitor
+Comment[fr]=Connectez-vous à des serveurs RDP Windows avec prise en charge multi-écrans
+Comment[ru]=Подключение к RDP-серверам Windows с поддержкой нескольких мониторов
+Exec=urdp %f
+Icon=preferences-desktop-remote-desktop
+Terminal=false
+Categories=Network;RemoteAccess;Qt;
+Keywords=rdp;remote;desktop;windows;freerdp;multimonitor;uzak;masaüstü;
+MimeType=application/x-rdp;
+StartupNotify=true
+StartupWMClass=urdp

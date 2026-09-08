@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "urdp"
+version = "1.0.0"
+description = "Remote Desktop Connection style FreeRDP front-end with multi-monitor support"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = ["PyQt6>=6.4"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Internet",
+]
+
+[project.scripts]
+urdp = "urdp.__main__:main"
+
+[tool.setuptools]
+packages = ["urdp"]
