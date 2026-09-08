@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
 from . import i18n, store, theme
@@ -33,6 +34,9 @@ def main() -> int:
     # Changing the language rebuilds the window: every label is translated when
     # it is constructed, so re-running the constructor is the complete fix.
     while True:
+        # Arabic and Hebrew mirror the whole interface, not just the text.
+        app.setLayoutDirection(Qt.LayoutDirection.RightToLeft if i18n.is_rtl()
+                               else Qt.LayoutDirection.LeftToRight)
         window = MainWindow()
         window.show()
         code = app.exec()
