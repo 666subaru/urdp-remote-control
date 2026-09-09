@@ -90,8 +90,18 @@ Tam ekrandan çıkmak için `Ctrl+Alt+Enter`.
 
 ### Diller
 
-İngilizce, Türkçe, Almanca, İspanyolca, Fransızca ve Rusça. Seçici sol alt
-köşede; seçim hatırlanıyor. İlk açılışta dil ortamdan (`LANG`) alınır.
+37 dil — Windows'un kendi sunduğu görüntü dili setiyle aynı:
+
+`en` English · `da` Dansk · `de` Deutsch · `et` Eesti · `es` Español · `fr` Français · `hr` Hrvatski · `id` Indonesia · `it` Italiano · `lv` Latviešu · `lt` Lietuvių · `hu` Magyar · `nl` Nederlands · `nb` Norsk bokmål · `pl` Polski · `pt` Português · `pt_BR` Português (Brasil) · `ro` Română · `sk` Slovenčina · `sl` Slovenščina · `sr` Srpski · `fi` Suomi · `sv` Svenska · `vi` Tiếng Việt · `tr` Türkçe · `cs` Čeština · `el` Ελληνικά · `bg` Български · `ru` Русский · `uk` Українська · `he` עברית · `ar` العربية · `th` ไทย · `ja` 日本語 · `zh_CN` 简体中文 · `zh_TW` 繁體中文 · `ko` 한국어
+
+Seçici sol alt köşede; seçim hatırlanıyor. İlk açılışta dil ortamdan (`LANG`)
+alınır; bölge kodu olan bir yerel ayar (`pt_BR`, `zh_CN`) varsa yalın dilin
+önüne geçer. Arapça ve İbranice'de yalnızca metin değil, arayüzün tamamı
+aynalanır.
+
+> **Çeviriler makine üretimidir ve ana dili konuşanlarca gözden geçirilmemiştir.**
+> Düzeltmeler memnuniyetle karşılanır — issue ya da pull request açın. Yanlış bir
+> kelime, tek bir JSON dosyasındaki tek satırdır.
 
 Yeni dil eklemek tek dosya: `keys.json` içindeki anahtar kümesini alın,
 değerleri çevirin, `urdp/locale/<kod>.json` olarak kaydedin. Kod değişikliği ya

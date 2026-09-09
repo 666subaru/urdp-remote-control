@@ -89,17 +89,25 @@ To try it without installing:
 
 ### Languages
 
-English, Turkish, German, Spanish, French and Russian. The picker sits in the
-bottom-left corner; the choice is remembered. On first run the language is
-taken from your environment (`LANG`).
+37 languages, matching the display languages Windows itself ships:
+
+`en` English · `da` Dansk · `de` Deutsch · `et` Eesti · `es` Español · `fr` Français · `hr` Hrvatski · `id` Indonesia · `it` Italiano · `lv` Latviešu · `lt` Lietuvių · `hu` Magyar · `nl` Nederlands · `nb` Norsk bokmål · `pl` Polski · `pt` Português · `pt_BR` Português (Brasil) · `ro` Română · `sk` Slovenčina · `sl` Slovenščina · `sr` Srpski · `fi` Suomi · `sv` Svenska · `vi` Tiếng Việt · `tr` Türkçe · `cs` Čeština · `el` Ελληνικά · `bg` Български · `ru` Русский · `uk` Українська · `he` עברית · `ar` العربية · `th` ไทย · `ja` 日本語 · `zh_CN` 简体中文 · `zh_TW` 繁體中文 · `ko` 한국어
+
+The picker sits in the bottom-left corner; the choice is remembered. On first
+run the language is taken from your environment (`LANG`), and a locale with a
+region (`pt_BR`, `zh_CN`) wins over the bare language when both exist. Arabic
+and Hebrew mirror the whole interface, not just the text.
 
 ![Display tab in Turkish](docs/display-tr.png)
 
-Adding one is a single file — copy `urdp/locale/en.json`'s key set from
-`keys.json`, translate the values, save it as `urdp/locale/<code>.json`. No code
-changes, no build step. `python3 -m unittest discover -s tests` then checks that
-your file matches the strings in the source and that every `{placeholder}`
-survived.
+> **Translations are machine-generated and have not been reviewed by native
+> speakers.** Corrections are very welcome — open an issue or a pull request.
+> A wrong word costs one line in one JSON file.
+
+Adding a language is a single file: copy the key set from `keys.json`, translate
+the values, save it as `urdp/locale/<code>.json`. No code changes, no build step.
+`python3 -m unittest discover -s tests` then checks that your file matches the
+strings in the source and that every `{placeholder}` survived.
 
 ### The tabs
 
