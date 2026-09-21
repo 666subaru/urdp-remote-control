@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import datetime
+import os
 import re
+import shlex
+from pathlib import Path
 
 from PyQt6.QtCore import QObject, QProcess, pyqtSignal
 
@@ -53,6 +57,12 @@ _MESSAGES = {
 }
 
 
+def log_path() -> Path:
+    """Where the output of the most recent session is kept."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "urdp" / "last-session.log"
+
+
 class Session(QObject):
     """A single ``xfreerdp3`` run."""
 
@@ -99,6 +109,7 @@ class Session(QObject):
         process.errorOccurred.connect(self._on_error)
         self._process = process
 
+        self._open_log()
         process.start()
         if not process.waitForStarted(5000):
             self._process = None
@@ -125,6 +136,51 @@ class Session(QObject):
             if not self._process.waitForFinished(3000):
                 self._process.kill()
 
+    # ------------------------------------------------------------------ log
+    def _open_log(self) -> None:
+        """Start a fresh log, keeping the previous one as ``.prev``.
+
+        FreeRDP's output is the only record of what went wrong once the
+        window has closed; keeping it on disk means a problem can be read
+        after the fact instead of being reproduced with a terminal open.
+        The password never appears here: it travels over stdin, and the
+        command line carries none.
+        """
+        self._log = None
+        path = log_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                path.replace(path.with_suffix(".prev.log"))
+            handle = open(path, "w", encoding="utf-8")
+            os.chmod(path, 0o600)
+        except OSError:
+            return
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        handle.write(f"# urdp session {stamp}\n")
+        handle.write("# " + " ".join(shlex.quote(a) for a in self.command)
+                     + "\n\n")
+        handle.flush()
+        self._log = handle
+
+    def _log_write(self, text: str) -> None:
+        if getattr(self, "_log", None) is not None:
+            try:
+                self._log.write(text)
+                self._log.flush()
+            except OSError:
+                self._log = None
+
+    def _close_log(self, exit_code: int, message: str) -> None:
+        if getattr(self, "_log", None) is None:
+            return
+        self._log_write(f"\n# exit code {exit_code}: {message}\n")
+        try:
+            self._log.close()
+        except OSError:
+            pass
+        self._log = None
+
     # ----------------------------------------------------------- housekeeping
     def _drain_stderr(self) -> None:
         if self._process is None:
@@ -133,6 +189,7 @@ class Session(QObject):
             "utf-8", "replace")
         if chunk:
             self._stderr.append(chunk)
+            self._log_write(chunk)
             self.log.emit(chunk)
 
     def _drain_stdout(self) -> None:
@@ -142,6 +199,7 @@ class Session(QObject):
             "utf-8", "replace")
         if chunk:
             self._stderr.append(chunk)
+            self._log_write(chunk)
             self.log.emit(chunk)
 
     def _diagnose(self, exit_code: int) -> tuple[bool, str]:
@@ -164,6 +222,7 @@ class Session(QObject):
         self._drain_stderr()
         self._drain_stdout()
         ok, message = self._diagnose(exit_code)
+        self._close_log(exit_code, message)
         self._process = None
         if not self._reported:
             self._reported = True

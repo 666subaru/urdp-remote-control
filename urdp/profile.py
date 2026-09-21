@@ -104,6 +104,7 @@ class Profile:
     remote_app_program: str = ""
     remote_app_cmdline: str = ""
     timeout_ms: int = 0                # 0 == leave FreeRDP's default alone
+    clipboard_debug: bool = False      # verbose cliprdr logging
     extra_args: str = ""
 
     # ------------------------------------------------------------------ API

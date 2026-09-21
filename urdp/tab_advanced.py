@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QHBoxLayout,
                              QLabel, QLineEdit, QSpinBox, QVBoxLayout)
 
 from .i18n import _
 from .profile import Profile
+from .session import log_path
 from .widgets import TabPage, body, hint, section
 
 CERT_POLICIES = [
@@ -139,6 +142,22 @@ class AdvancedTab(TabPage):
         content4.addLayout(app_form)
         root.addWidget(box4)
 
+        # --------------------------------------------------------- diagnostics
+        box6, content6 = section(_("Diagnostics"),
+                                 ["tools-report-bug", "dialog-information"])
+        self.clipboard_debug = QCheckBox(
+            _("Detailed clipboard log (for troubleshooting copy and paste)"))
+        content6.addWidget(self.clipboard_debug)
+        home = str(Path.home())
+        shown = str(log_path())
+        if shown.startswith(home):
+            shown = "~" + shown[len(home):]
+        content6.addWidget(hint(
+            _("Each session's FreeRDP output is saved to {path}. The detailed "
+              "log adds the clipboard channel's messages; turn it off once the "
+              "problem is found.").format(path=shown)))
+        root.addWidget(box6)
+
         # ------------------------------------------------- extra FreeRDP flags
         box5, content5 = section(_("Extra FreeRDP options"),
                                  ["utilities-terminal", "text-x-script"])
@@ -196,6 +215,7 @@ class AdvancedTab(TabPage):
         self.remote_app_program.setText(p.remote_app_program)
         self.remote_app_cmdline.setText(p.remote_app_cmdline)
         self.extra_args.setText(p.extra_args)
+        self.clipboard_debug.setChecked(p.clipboard_debug)
 
         self._update_gateway()
         self._update_remote_app()
@@ -218,3 +238,4 @@ class AdvancedTab(TabPage):
         p.remote_app_program = self.remote_app_program.text().strip()
         p.remote_app_cmdline = self.remote_app_cmdline.text().strip()
         p.extra_args = self.extra_args.text().strip()
+        p.clipboard_debug = self.clipboard_debug.isChecked()

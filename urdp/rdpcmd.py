@@ -28,6 +28,16 @@ VALID_NETWORKS = {"modem", "broadband", "broadband-low", "broadband-high",
                   "wan", "lan", "auto"}
 
 
+#: FreeRDP's log tags for the clipboard channel, as found in the 3.x binaries.
+#: Listed exactly rather than with a wildcard, which wLog does not promise.
+CLIPBOARD_LOG_TAGS = (
+    "com.freerdp.channels.cliprdr.client",
+    "com.freerdp.channels.cliprdr.common",
+    "com.freerdp.client.common.cliprdr.file",
+    "com.freerdp.client.x11.cliprdr",
+)
+
+
 def find_client() -> str | None:
     """Return the path of the first FreeRDP client we can find."""
     for name in CANDIDATES:
@@ -166,6 +176,9 @@ def _advanced_args(p: Profile) -> list[str]:
         args.append("+restricted-admin")
     if p.timeout_ms:
         args.append(f"/timeout:{p.timeout_ms}")
+    if p.clipboard_debug:
+        args.append("/log-filters:" + ",".join(f"{tag}:DEBUG"
+                                               for tag in CLIPBOARD_LOG_TAGS))
 
     if p.gateway_enabled and p.gateway_host:
         parts = [f"g:{p.gateway_host}:{p.gateway_port}"]

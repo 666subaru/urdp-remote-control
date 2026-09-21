@@ -119,6 +119,45 @@ class CommandTest(unittest.TestCase):
                                        client="x"))
 
 
+class DiagnosticsTest(unittest.TestCase):
+    def test_clipboard_debug_adds_every_cliprdr_tag(self):
+        from urdp.rdpcmd import CLIPBOARD_LOG_TAGS
+        got = args(Profile(host="pc", clipboard_debug=True))
+        filters = [a for a in got if a.startswith("/log-filters:")]
+        self.assertEqual(len(filters), 1)
+        for tag in CLIPBOARD_LOG_TAGS:
+            self.assertIn(f"{tag}:DEBUG", filters[0])
+
+    def test_no_log_filters_by_default(self):
+        self.assertFalse(any(a.startswith("/log-filters:")
+                             for a in args(Profile(host="pc"))))
+
+    def test_session_log_is_private_and_rotated(self):
+        from urdp import session as session_module
+        with tempfile.TemporaryDirectory() as folder:
+            old = os.environ.get("XDG_CACHE_HOME")
+            os.environ["XDG_CACHE_HOME"] = folder
+            try:
+                for run in (1, 2):
+                    s = session_module.Session()
+                    s.command = ["xfreerdp3", "/v:pc", f"/u:run{run}"]
+                    s._open_log()
+                    s._log_write("some output\n")
+                    s._close_log(0, "done")
+                path = session_module.log_path()
+                text = path.read_text()
+                self.assertIn("/u:run2", text)
+                self.assertIn("# exit code 0: done", text)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                previous = path.with_suffix(".prev.log").read_text()
+                self.assertIn("/u:run1", previous)
+            finally:
+                if old is None:
+                    os.environ.pop("XDG_CACHE_HOME", None)
+                else:
+                    os.environ["XDG_CACHE_HOME"] = old
+
+
 class ValidateTest(unittest.TestCase):
     def test_empty_host(self):
         problems = validate(Profile())
