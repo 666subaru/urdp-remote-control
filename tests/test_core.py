@@ -211,6 +211,110 @@ class ClipfixTest(unittest.TestCase):
         self.assertIsNone(repaired_image(None))
 
 
+class RepairerTest(unittest.TestCase):
+    """Replays what the logs showed: Windows announcing a screenshot three
+    times in half a second, and xfreerdp taking the selection back."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtGui import QGuiApplication
+        cls.app = QGuiApplication.instance() or QGuiApplication([])
+
+    def _fake(self, good_png=False):
+        from PyQt6.QtCore import QMimeData, QObject, pyqtSignal
+        from PyQt6.QtGui import QClipboard
+
+        class FakeClipboard(QObject):
+            changed = pyqtSignal(QClipboard.Mode)
+
+            def __init__(self):
+                super().__init__()
+                self.owner = "xfreerdp"
+                self.sets = 0
+
+            def ownsClipboard(self):
+                return self.owner == "us"
+
+            def mimeData(self):
+                mime = QMimeData()
+                if self.owner == "xfreerdp":
+                    png = b""
+                    if good_png:
+                        from PyQt6.QtCore import QBuffer, QIODevice
+                        from PyQt6.QtGui import QImage
+                        buf = QBuffer(); buf.open(QIODevice.OpenModeFlag.WriteOnly)
+                        QImage.fromData(_bitfields_bmp(), "BMP").save(buf, "PNG")
+                        png = bytes(buf.data())
+                    mime.setData("image/png", png)
+                    mime.setData("image/bmp", _bitfields_bmp())
+                return mime
+
+            def setImage(self, image):
+                self.sets += 1
+                self.owner = "us"
+                self.changed.emit(QClipboard.Mode.Clipboard)
+
+            def xfreerdp_takes_it(self):
+                self.owner = "xfreerdp"
+                self.changed.emit(QClipboard.Mode.Clipboard)
+
+        return FakeClipboard()
+
+    def _repairer(self, clip):
+        from urdp.clipfix import Repairer
+        Repairer.SETTLE_MS, Repairer.VERIFY_MS = 40, 80
+        self.messages = []
+        return Repairer(clip, log=self.messages.append)
+
+    def _run(self, ms):
+        import time
+        end = time.monotonic() + ms / 1000
+        while time.monotonic() < end:
+            self.app.processEvents()
+            time.sleep(0.005)
+
+    def test_a_burst_of_announcements_gives_one_repair(self):
+        clip = self._fake()
+        keep = self._repairer(clip)
+        for _ in range(3):                     # 00.391, 00.870, 00.878
+            clip.xfreerdp_takes_it()
+            self._run(10)
+        self._run(200)
+        self.assertEqual(clip.sets, 1)
+        self.assertTrue(clip.ownsClipboard())
+        del keep
+
+    def test_repairs_again_when_taken_back(self):
+        clip = self._fake()
+        keep = self._repairer(clip)
+        clip.xfreerdp_takes_it()
+        self._run(150)
+        self.assertEqual(clip.sets, 1)
+        clip.xfreerdp_takes_it()               # the announcement it missed
+        self._run(200)
+        self.assertEqual(clip.sets, 2)
+        self.assertTrue(clip.ownsClipboard())
+        del keep
+
+    def test_gives_up_instead_of_fighting_forever(self):
+        clip = self._fake()
+        keep = self._repairer(clip)
+        for _ in range(10):
+            clip.xfreerdp_takes_it()
+            self._run(120)
+        self.assertLessEqual(clip.sets, 4)
+        self.assertTrue(any("giving up" in m for m in self.messages))
+        del keep
+
+    def test_leaves_a_working_image_alone(self):
+        clip = self._fake(good_png=True)
+        keep = self._repairer(clip)
+        clip.xfreerdp_takes_it()
+        self._run(200)
+        self.assertEqual(clip.sets, 0)
+        del keep
+
+
 class ValidateTest(unittest.TestCase):
     def test_empty_host(self):
         problems = validate(Profile())
