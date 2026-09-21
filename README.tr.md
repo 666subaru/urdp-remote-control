@@ -174,6 +174,14 @@ Aynı yoklamayı Genel sekmesindeki **Sına** düğmesiyle bağlanmadan önce de
 
 ## Bilinen sınırlar
 
+- **Windows'tan ekran görüntüsü kopyalamak.** FreeRDP 3.31, Windows'un ekran
+  görüntüleri için kullandığı `BI_BITFIELDS` sıkıştırmalı `CF_DIB` biçimini
+  PNG'ye çeviremiyor; Linux uygulamaları önce PNG istediği için yapıştırma boş
+  kalıyor. Aynı resim BMP olarak sağlam geliyor. Oturum boyunca çalışan küçük
+  bir yardımcı (`urdp/clipfix.py`) PNG'si bozuk ama BMP'si sağlam panoyu fark
+  edip Qt ile çevirir ve düzgün resmi geri koyar. PNG'si zaten çalışan panoya
+  hiç dokunmaz.
+
 - Windows tarafı **Pro / Enterprise / Education** olmalıdır. Home sürümünde RDP
   sunucusu yoktur.
 - Sertifika sorusu bir uçbirim olmadığı için ekranda gösterilemez; **Gelişmiş**

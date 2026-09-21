@@ -174,6 +174,14 @@ The **Test** button on the General tab runs the same probe before you connect.
 
 ## Known limits
 
+- **Copying screenshots from Windows.** FreeRDP 3.31 cannot turn a Windows
+  `CF_DIB` with `BI_BITFIELDS` compression — the layout Windows uses for
+  screenshots — into PNG, so Linux applications (which ask for PNG first) paste
+  nothing. The same image does arrive intact as BMP. While a session runs, a
+  small helper (`urdp/clipfix.py`) spots a clipboard whose PNG is unreadable but
+  whose BMP is fine, converts it with Qt and puts a proper image back. It never
+  touches a clipboard whose PNG already works.
+
 - The Windows side must be a **Pro / Enterprise / Education** edition. Home has
   no RDP server.
 - The certificate question cannot be shown, because the application has no

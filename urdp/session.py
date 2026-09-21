@@ -6,9 +6,10 @@ import datetime
 import os
 import re
 import shlex
+import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QProcess, pyqtSignal
+from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, pyqtSignal
 
 from .i18n import _
 from .profile import Profile
@@ -79,6 +80,7 @@ class Session(QObject):
         # QProcess can report both errorOccurred and finished for one failed
         # start; without this the user would get two error dialogs.
         self._reported = True
+        self._clipfix: QProcess | None = None
 
     # ---------------------------------------------------------------- launch
     def start(self, profile: Profile, password: str | None = None) -> str | None:
@@ -123,6 +125,8 @@ class Session(QObject):
             process.waitForBytesWritten(1000)
         process.closeWriteChannel()
 
+        if profile.clipboard:
+            self._start_clipfix()
         self.started.emit()
         return None
 
@@ -131,10 +135,52 @@ class Session(QObject):
                 and self._process.state() != QProcess.ProcessState.NotRunning)
 
     def stop(self) -> None:
+        self._stop_clipfix()
         if self.is_running() and self._process is not None:
             self._process.terminate()
             if not self._process.waitForFinished(3000):
                 self._process.kill()
+
+    # -------------------------------------------------------------- clipfix
+    def _start_clipfix(self) -> None:
+        """Run :mod:`urdp.clipfix` next to FreeRDP for this session.
+
+        It needs an X display, which XWayland provides on a Wayland desktop;
+        without one there is nothing to repair, because xfreerdp would not be
+        running either.
+        """
+        if not os.environ.get("DISPLAY"):
+            return
+        helper = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("QT_QPA_PLATFORM", "xcb")
+        root = str(Path(__file__).resolve().parent.parent)
+        old_path = env.value("PYTHONPATH")
+        env.insert("PYTHONPATH", root + (os.pathsep + old_path if old_path else ""))
+        helper.setProcessEnvironment(env)
+        helper.setProgram(sys.executable)
+        helper.setArguments(["-m", "urdp.clipfix", str(os.getpid())])
+        helper.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        helper.readyReadStandardOutput.connect(
+            lambda: self._log_write(bytes(helper.readAllStandardOutput())
+                                    .decode("utf-8", "replace")))
+        helper.start()
+        if helper.waitForStarted(3000):
+            self._clipfix = helper
+        else:
+            self._log_write("[urdp-clipfix] could not be started\n")
+
+    def _stop_clipfix(self) -> None:
+        helper, self._clipfix = self._clipfix, None
+        if helper is None:
+            return
+        if helper.state() != QProcess.ProcessState.NotRunning:
+            helper.terminate()
+            if not helper.waitForFinished(2000):
+                helper.kill()
+                helper.waitForFinished(1000)
+        self._log_write(bytes(helper.readAllStandardOutput())
+                        .decode("utf-8", "replace"))
 
     # ------------------------------------------------------------------ log
     def _open_log(self) -> None:
@@ -222,6 +268,7 @@ class Session(QObject):
         self._drain_stderr()
         self._drain_stdout()
         ok, message = self._diagnose(exit_code)
+        self._stop_clipfix()
         self._close_log(exit_code, message)
         self._process = None
         if not self._reported:

@@ -158,6 +158,59 @@ class DiagnosticsTest(unittest.TestCase):
                     os.environ["XDG_CACHE_HOME"] = old
 
 
+def _bitfields_bmp(width=64, height=32):
+    """A BMP file with BI_BITFIELDS masks -- the layout Windows screenshots use.
+
+    Built by hand so the test does not depend on winpr being installed.
+    """
+    import struct
+    pixels = bytes([0x40, 0x80, 0xC0, 0xFF]) * (width * height)
+    info = struct.pack("<IiiHHIIiiII", 40, width, height, 1, 32, 3,
+                       len(pixels), 2835, 2835, 0, 0)
+    masks = struct.pack("<III", 0x00FF0000, 0x0000FF00, 0x000000FF)
+    offset = 14 + len(info) + len(masks)
+    header = struct.pack("<2sIHHI", b"BM", offset + len(pixels), 0, 0, offset)
+    return header + info + masks + pixels
+
+
+class ClipfixTest(unittest.TestCase):
+    """The clipboard repair must act on FreeRDP's broken images and nothing else."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtGui import QGuiApplication
+        cls.app = QGuiApplication.instance() or QGuiApplication([])
+
+    def _mime(self, **formats):
+        from PyQt6.QtCore import QMimeData
+        mime = QMimeData()
+        for name, data in formats.items():
+            mime.setData(name.replace("_", "/"), data)
+        return mime
+
+    def test_repairs_empty_png_with_bitfields_bmp(self):
+        from urdp.clipfix import repaired_image
+        image = repaired_image(self._mime(image_png=b"", image_bmp=_bitfields_bmp()))
+        self.assertIsNotNone(image)
+        self.assertEqual((image.width(), image.height()), (64, 32))
+
+    def test_leaves_a_working_png_alone(self):
+        from PyQt6.QtCore import QBuffer, QIODevice
+        from PyQt6.QtGui import QImage
+        from urdp.clipfix import repaired_image
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        QImage.fromData(_bitfields_bmp(), "BMP").save(buffer, "PNG")
+        mime = self._mime(image_png=bytes(buffer.data()), image_bmp=_bitfields_bmp())
+        self.assertIsNone(repaired_image(mime))
+
+    def test_ignores_text_and_garbage(self):
+        from urdp.clipfix import repaired_image
+        self.assertIsNone(repaired_image(self._mime(text_plain=b"hello")))
+        self.assertIsNone(repaired_image(self._mime(image_png=b"", image_bmp=b"BMjunk")))
+        self.assertIsNone(repaired_image(None))
+
+
 class ValidateTest(unittest.TestCase):
     def test_empty_host(self):
         problems = validate(Profile())
