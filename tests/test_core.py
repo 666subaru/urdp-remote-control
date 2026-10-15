@@ -315,6 +315,74 @@ class RepairerTest(unittest.TestCase):
         del keep
 
 
+class FileListRepairTest(unittest.TestCase):
+    """Windows -> Linux file copy: the files sit in FreeRDP's FUSE mount but
+    text/uri-list comes back empty."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6.QtGui import QGuiApplication
+        cls.app = QGuiApplication.instance() or QGuiApplication([])
+
+    def _mount(self, folder):
+        root = Path(folder) / "com.freerdp.client.cliprdr.4242"
+        (root / "1" / "old.txt").parent.mkdir(parents=True)
+        (root / "1" / "old.txt").write_text("stale")
+        (root / "2" / "[EUR]_DAYDREAM").mkdir(parents=True)
+        (root / "2" / "notes.txt").write_text("hi")
+        return root
+
+    def test_finds_the_mount_in_the_mount_table(self):
+        from urdp.clipfix import fuse_root
+        with tempfile.TemporaryDirectory() as folder:
+            table = Path(folder) / "mounts"
+            table.write_text(
+                "proc /proc proc rw 0 0\n"
+                "/dev/fuse /tmp/com.freerdp.client.cliprdr.4242 fuse rw 0 0\n")
+            self.assertEqual(fuse_root(4242, str(table)),
+                             Path("/tmp/com.freerdp.client.cliprdr.4242"))
+            self.assertIsNone(fuse_root(999, str(table)))
+            self.assertIsNone(fuse_root(0, str(table)))
+
+    def test_lists_only_the_newest_clipboard_data(self):
+        from urdp.clipfix import newest_clip_entries
+        with tempfile.TemporaryDirectory() as folder:
+            names = [p.name for p in newest_clip_entries(self._mount(folder))]
+            self.assertEqual(names, ["[EUR]_DAYDREAM", "notes.txt"])
+
+    def test_supplies_an_encoded_uri_list_when_freerdp_left_it_empty(self):
+        from PyQt6.QtCore import QMimeData
+        from urdp.clipfix import repaired_files
+        with tempfile.TemporaryDirectory() as folder:
+            root = self._mount(folder)
+            mime = QMimeData()
+            mime.setData("text/uri-list", b"")
+            mime.setData("FileGroupDescriptorW", b"x")
+            out = repaired_files(mime, root)
+            self.assertIsNotNone(out)
+            paths = [u.toLocalFile() for u in out.urls()]
+            self.assertEqual(paths, [str(root / "2" / "[EUR]_DAYDREAM"),
+                                     str(root / "2" / "notes.txt")])
+            gnome = bytes(out.data("x-special/gnome-copied-files")).decode()
+            self.assertTrue(gnome.startswith("copy\nfile://"))
+            self.assertIn("%5BEUR%5D", gnome)        # brackets encoded
+
+    def test_leaves_a_working_list_and_plain_text_alone(self):
+        from PyQt6.QtCore import QMimeData
+        from urdp.clipfix import repaired_files
+        with tempfile.TemporaryDirectory() as folder:
+            root = self._mount(folder)
+            ok = QMimeData()
+            ok.setData("text/uri-list", b"file:///home/x/a.txt\r\n")
+            self.assertIsNone(repaired_files(ok, root))
+            text = QMimeData()
+            text.setText("hello")
+            self.assertIsNone(repaired_files(text, root))
+            empty = QMimeData()
+            empty.setData("text/uri-list", b"")
+            self.assertIsNone(repaired_files(empty, None))
+
+
 class ValidateTest(unittest.TestCase):
     def test_empty_host(self):
         problems = validate(Profile())

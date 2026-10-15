@@ -159,7 +159,8 @@ class Session(QObject):
         env.insert("PYTHONPATH", root + (os.pathsep + old_path if old_path else ""))
         helper.setProcessEnvironment(env)
         helper.setProgram(sys.executable)
-        helper.setArguments(["-m", "urdp.clipfix", str(os.getpid())])
+        client = self._process.processId() if self._process is not None else 0
+        helper.setArguments(["-m", "urdp.clipfix", str(os.getpid()), str(client)])
         helper.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         helper.readyReadStandardOutput.connect(
             lambda: self._log_write(bytes(helper.readAllStandardOutput())

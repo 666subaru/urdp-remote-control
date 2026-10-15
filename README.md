@@ -181,6 +181,11 @@ The **Test** button on the General tab runs the same probe before you connect.
   small helper (`urdp/clipfix.py`) spots a clipboard whose PNG is unreadable but
   whose BMP is fine, converts it with Qt and puts a proper image back. It never
   touches a clipboard whose PNG already works.
+- **Copying files from Windows.** xfreerdp receives the file list and exposes
+  the files under a FUSE mount, where they read fine, but it fails to produce the
+  `text/uri-list` a file manager needs, so pasting in Dolphin did nothing. The
+  same helper notices the empty list and writes one pointing at the mount.
+  Copying files from Linux to Windows never had this problem.
 
 - The Windows side must be a **Pro / Enterprise / Education** edition. Home has
   no RDP server.
