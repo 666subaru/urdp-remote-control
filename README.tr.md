@@ -181,12 +181,6 @@ Aynı yoklamayı Genel sekmesindeki **Sına** düğmesiyle bağlanmadan önce de
   bir yardımcı (`urdp/clipfix.py`) PNG'si bozuk ama BMP'si sağlam panoyu fark
   edip Qt ile çevirir ve düzgün resmi geri koyar. PNG'si zaten çalışan panoya
   hiç dokunmaz.
-- **Windows'tan dosya kopyalamak.** xfreerdp dosya listesini alıp dosyaları
-  FUSE ile bağlanan sanal bir klasörde gösteriyor ve oradan okunabiliyorlar;
-  ama dosya yöneticisinin ihtiyaç duyduğu `text/uri-list`'i üretemiyor, bu
-  yüzden Dolphin'de yapıştırma bir şey yapmıyordu. Aynı yardımcı boş listeyi
-  fark edip sanal klasörü gösteren listeyi kendisi yazar. Linux'tan Windows'a
-  dosya kopyalamada bu sorun hiç olmadı.
 
 - Windows tarafı **Pro / Enterprise / Education** olmalıdır. Home sürümünde RDP
   sunucusu yoktur.

@@ -13,14 +13,6 @@ is fine, converts the BMP with Qt, and puts a proper image back.  It never acts
 on a clipboard whose PNG already works, so it goes quiet on its own once FreeRDP
 is fixed.
 
-Files copied on Windows have the same shape of problem.  xfreerdp receives the
-file list and exposes the files under a FUSE mount
-(``<tmp>/com.freerdp.client.cliprdr.<pid>/<clipDataId>/``) where they read
-correctly, but it fails to produce the ``text/uri-list`` that points a file
-manager at them ("failed to get clipboard data in format text/uri-list [source
-format FileGroupDescriptorW]").  When the list comes back empty while the mount
-holds entries, the helper writes the list itself.
-
 It runs as a separate X11 client (``QT_QPA_PLATFORM=xcb``) because xfreerdp owns
 the selection on the X side, and an X client may read it without having focus --
 something Wayland does not allow an unfocused window.
@@ -31,9 +23,7 @@ from __future__ import annotations
 import os
 import sys
 
-from pathlib import Path
-
-from PyQt6.QtCore import QMimeData, QTimer, QUrl
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QClipboard, QGuiApplication, QImage
 
 
@@ -49,68 +39,6 @@ def repaired_image(mime) -> QImage | None:
             return None                  # the normal case: nothing to repair
     image = QImage.fromData(mime.data("image/bmp"), "BMP")
     return None if image.isNull() else image
-
-
-def fuse_root(pid: int, mounts: str = "/proc/self/mounts") -> Path | None:
-    """The FUSE mount xfreerdp *pid* uses for remote files, if any.
-
-    Read from the mount table rather than guessed from ``/tmp``, because
-    FreeRDP uses whatever temporary directory the environment points at.
-    """
-    if not pid:
-        return None
-    suffix = f"/com.freerdp.client.cliprdr.{pid}"
-    try:
-        with open(mounts, encoding="utf-8") as table:
-            for line in table:
-                fields = line.split()
-                if len(fields) > 1:
-                    point = fields[1].replace("\\040", " ")
-                    if point.endswith(suffix):
-                        return Path(point)
-    except OSError:
-        return None
-    return None
-
-
-def newest_clip_entries(root: Path) -> list[Path]:
-    """Top-level items of the most recent clipboard data in *root*.
-
-    Each copy on Windows gets a new, higher clipDataId directory; older ones
-    are removed when FreeRDP unlocks them.
-    """
-    try:
-        ids = [d for d in root.iterdir() if d.name.isdigit() and d.is_dir()]
-        if not ids:
-            return []
-        newest = max(ids, key=lambda d: int(d.name))
-        return sorted(newest.iterdir(), key=lambda p: p.name)
-    except OSError:
-        return []
-
-
-def repaired_files(mime, root: Path | None) -> QMimeData | None:
-    """A file list for *mime* when FreeRDP left ``text/uri-list`` empty."""
-    if mime is None or root is None:
-        return None
-    if "text/uri-list" not in set(mime.formats()):
-        return None
-    if bytes(mime.data("text/uri-list")).strip():
-        return None                      # FreeRDP produced it: nothing to do
-    # Asking for the list above is what makes xfreerdp fetch the file
-    # descriptors and fill the mount, so it is only listed now.
-    entries = newest_clip_entries(root)
-    if not entries:
-        return None
-    urls = [QUrl.fromLocalFile(str(entry)) for entry in entries]
-    out = QMimeData()
-    out.setUrls(urls)
-    encoded = [u.toString(QUrl.ComponentFormattingOption.FullyEncoded)
-               for u in urls]
-    # GNOME-family file managers read this one instead of text/uri-list.
-    out.setData("x-special/gnome-copied-files",
-                ("copy\n" + "\n".join(encoded)).encode())
-    return out
 
 
 def _log(message: str) -> None:
@@ -135,10 +63,9 @@ class Repairer:
     MAX_REPAIRS = 4          # per burst of activity
     BURST_S = 10.0
 
-    def __init__(self, clipboard, log=_log, now=None, mount=None) -> None:
+    def __init__(self, clipboard, log=_log, now=None) -> None:
         import time
         self.clipboard = clipboard
-        self.mount = mount or (lambda: None)
         self.log = log
         self.now = now or time.monotonic
         self.running = False
@@ -175,10 +102,8 @@ class Repairer:
         try:
             if self.clipboard.ownsClipboard():
                 return
-            mime = self.clipboard.mimeData()
-            image = repaired_image(mime)
-            files = None if image is not None else repaired_files(mime, self.mount())
-            if image is None and files is None:
+            image = repaired_image(self.clipboard.mimeData())
+            if image is None:
                 return
             now = self.now()
             self.repairs = [t for t in self.repairs if now - t < self.BURST_S]
@@ -187,15 +112,9 @@ class Repairer:
                          "back")
                 return
             self.repairs.append(now)
-            if image is not None:
-                self.clipboard.setImage(image)
-                self.log(f"repaired a {image.width()}x{image.height()} image "
-                         f"whose PNG form FreeRDP could not produce")
-            else:
-                count = len(files.urls())
-                self.clipboard.setMimeData(files)
-                self.log(f"supplied the file list FreeRDP could not produce "
-                         f"({count} item{'s' if count != 1 else ''})")
+            self.clipboard.setImage(image)
+            self.log(f"repaired a {image.width()}x{image.height()} image "
+                     f"whose PNG form FreeRDP could not produce")
             self.verify.start()
         except Exception as error:       # noqa: BLE001 - never kill the session
             self.log(f"could not repair the clipboard: {error}")
@@ -208,11 +127,8 @@ class Repairer:
 
 def main() -> int:
     parent = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-    client = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     app = QGuiApplication(sys.argv[:1])
-    repairer = Repairer(app.clipboard(), mount=lambda: fuse_root(client))
-    # Something may already be on the clipboard when we start.
-    repairer.timer.start()
+    repairer = Repairer(app.clipboard())
 
     # Belt and braces: the session stops us, but if the app itself dies the
     # helper must not linger and keep owning the clipboard.
@@ -226,7 +142,7 @@ def main() -> int:
     watchdog = QTimer()
     watchdog.timeout.connect(check_parent)
     watchdog.start(2000)
-    _log("watching the clipboard for broken images and file lists")
+    _log("watching the clipboard for broken images")
     code = app.exec()
     del repairer
     return code
