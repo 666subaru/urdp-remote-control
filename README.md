@@ -182,6 +182,14 @@ The **Test** button on the General tab runs the same probe before you connect.
   whose BMP is fine, converts it with Qt and puts a proper image back. It never
   touches a clipboard whose PNG already works.
 
+- **Copying files from Windows.** FreeRDP 3.32 exposes the copied files under
+  `/tmp/com.freerdp.client.cliprdr.<pid>/` but cannot turn Windows' file list
+  into `text/uri-list` (its converter is handed the wrong format id), so a file
+  manager pastes nothing. `urdp/native/filelist.c`, preloaded into `xfreerdp3`,
+  builds that list itself whenever FreeRDP returns none. It is compiled once
+  with the system C compiler (`cc`) and cached in `~/.cache/urdp/`; without a
+  compiler the session still runs, only without this fix.
+
 - The Windows side must be a **Pro / Enterprise / Education** edition. Home has
   no RDP server.
 - The certificate question cannot be shown, because the application has no

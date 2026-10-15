@@ -182,6 +182,15 @@ Aynı yoklamayı Genel sekmesindeki **Sına** düğmesiyle bağlanmadan önce de
   edip Qt ile çevirir ve düzgün resmi geri koyar. PNG'si zaten çalışan panoya
   hiç dokunmaz.
 
+- **Windows'tan dosya kopyalamak.** FreeRDP 3.32 kopyalanan dosyaları
+  `/tmp/com.freerdp.client.cliprdr.<pid>/` altında sunuyor ama Windows'un dosya
+  listesini `text/uri-list`'e çeviremiyor (çeviriciye yanlış biçim kimliği
+  veriliyor), bu yüzden dosya yöneticisi hiçbir şey yapıştırmıyor.
+  `xfreerdp3`'e önceden yüklenen `urdp/native/filelist.c`, FreeRDP liste
+  üretemediğinde listeyi kendisi oluşturur. Sistem C derleyicisiyle (`cc`) bir
+  kez derlenip `~/.cache/urdp/` altında saklanır; derleyici yoksa oturum yine
+  çalışır, yalnızca bu düzeltme olmaz.
+
 - Windows tarafı **Pro / Enterprise / Education** olmalıdır. Home sürümünde RDP
   sunucusu yoktur.
 - Sertifika sorusu bir uçbirim olmadığı için ekranda gösterilemez; **Gelişmiş**

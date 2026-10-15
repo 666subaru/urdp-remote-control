@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, pyqtSignal
 
+from . import fileshim
 from .i18n import _
 from .profile import Profile
 from .rdpcmd import build_command, find_client
@@ -81,6 +82,7 @@ class Session(QObject):
         # start; without this the user would get two error dialogs.
         self._reported = True
         self._clipfix: QProcess | None = None
+        self._file_fix_note = ""
 
     # ---------------------------------------------------------------- launch
     def start(self, profile: Profile, password: str | None = None) -> str | None:
@@ -99,10 +101,13 @@ class Session(QObject):
 
         self._stderr = []
         self._reported = False
+        self._file_fix_note = ""
         self.command = build_command(profile, with_password=bool(password),
                                      client=client)
 
         process = QProcess(self)
+        if profile.clipboard:
+            self._preload_file_fix(process)
         process.setProgram(self.command[0])
         process.setArguments(self.command[1:])
         process.readyReadStandardError.connect(self._drain_stderr)
@@ -112,6 +117,8 @@ class Session(QObject):
         self._process = process
 
         self._open_log()
+        if self._file_fix_note:
+            self._log_write(f"[urdp-filelist] {self._file_fix_note}\n")
         process.start()
         if not process.waitForStarted(5000):
             self._process = None
@@ -140,6 +147,22 @@ class Session(QObject):
             self._process.terminate()
             if not self._process.waitForFinished(3000):
                 self._process.kill()
+
+    # ------------------------------------------------------------- filelist
+    def _preload_file_fix(self, process: QProcess) -> None:
+        """Preload :mod:`urdp.fileshim`'s library so Windows files paste.
+
+        Without it, files copied on Windows paste as nothing on Linux; the
+        session itself works either way, so a failed build is only logged.
+        """
+        library, note = fileshim.ensure()
+        self._file_fix_note = note if library is None else f"{note}: {library}"
+        if library is None:
+            return
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("LD_PRELOAD", fileshim.preload_value(
+            library, env.value("LD_PRELOAD")))
+        process.setProcessEnvironment(env)
 
     # -------------------------------------------------------------- clipfix
     def _start_clipfix(self) -> None:

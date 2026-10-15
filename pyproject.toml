@@ -23,3 +23,6 @@ urdp = "urdp.__main__:main"
 
 [tool.setuptools]
 packages = ["urdp"]
+
+[tool.setuptools.package-data]
+urdp = ["locale/*.json", "native/*.c"]

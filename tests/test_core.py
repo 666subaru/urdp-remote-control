@@ -8,11 +8,13 @@ import re
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from urdp import capabilities, i18n, monitors, probe, rdpfile  # noqa: E402
+from urdp import (capabilities, fileshim, i18n, monitors,  # noqa: E402
+                  probe, rdpfile)
 from urdp.profile import Profile                        # noqa: E402
 from urdp.rdpcmd import build_command, validate         # noqa: E402
 
@@ -539,6 +541,82 @@ class TranslationTest(unittest.TestCase):
         i18n.set_language("nonexistent")
         self.assertEqual(i18n.language(), "en")
         self.assertEqual(i18n.gettext("Connect"), "Connect")
+
+
+# Runs inside a child process with the shim preloaded, because a preload
+# cannot be added to a process that is already running.
+_SHIM_PROBE = r"""
+import ctypes, struct, sys
+w = ctypes.CDLL("libwinpr3.so.3", mode=ctypes.RTLD_GLOBAL)
+get = ctypes.CDLL(None).ClipboardGetData
+get.restype = ctypes.c_void_p
+get.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+w.ClipboardCreate.restype = ctypes.c_void_p
+w.ClipboardGetDelegate.restype = ctypes.c_void_p
+w.ClipboardGetDelegate.argtypes = [ctypes.c_void_p]
+w.ClipboardGetFormatId.restype = ctypes.c_uint32
+w.ClipboardGetFormatId.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+w.ClipboardSetData.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+
+def descriptor(name):
+    return b"\0" * 72 + name.encode("utf-16-le").ljust(520, b"\0")
+
+names = ["[EUR] folder", "[EUR] folder\\inside.mkv", "Ödev 1.txt"]
+blob = struct.pack("<I", len(names)) + b"".join(descriptor(n) for n in names)
+cb = w.ClipboardCreate()
+base = ctypes.create_string_buffer(b"/tmp/com.freerdp.client.cliprdr.1/2")
+ctypes.c_void_p.from_address(w.ClipboardGetDelegate(cb) + 16).value = ctypes.addressof(base)
+w.ClipboardSetData(cb, w.ClipboardGetFormatId(cb, b"FileGroupDescriptorW"), blob, len(blob))
+size = ctypes.c_uint32(0)
+out = get(cb, w.ClipboardGetFormatId(cb, b"text/uri-list"), ctypes.byref(size))
+sys.stdout.write(ctypes.string_at(out, size.value).decode() if out else "NULL")
+"""
+
+
+class FileListShimTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = unittest.mock.patch.dict(os.environ,
+                                           {"XDG_CACHE_HOME": self.tmp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_preload_keeps_existing_entries_once(self):
+        lib = Path("/c/libfilelist-x.so")
+        self.assertEqual(fileshim.preload_value(lib, None), str(lib))
+        self.assertEqual(fileshim.preload_value(lib, "/a.so:/b.so"),
+                         f"{lib} /a.so /b.so")
+        self.assertEqual(fileshim.preload_value(lib, f"/a.so {lib}"),
+                         f"/a.so {lib}")
+
+    def test_without_compiler_there_is_no_library(self):
+        with unittest.mock.patch("shutil.which", return_value=None):
+            library, note = fileshim.ensure()
+        self.assertIsNone(library)
+        self.assertIn("compiler", note)
+
+    def test_windows_file_list_becomes_uri_list(self):
+        import ctypes.util
+        import shutil
+        import subprocess
+        if not ctypes.util.find_library("winpr3"):
+            self.skipTest("winpr3 is not installed")
+        if not any(shutil.which(c) for c in ("cc", "gcc", "clang")):
+            self.skipTest("no C compiler")
+        library, note = fileshim.ensure()
+        self.assertIsNotNone(library, note)
+        self.assertEqual(fileshim.ensure()[1], "cached")
+        result = subprocess.run(
+            [sys.executable, "-c", _SHIM_PROBE], capture_output=True,
+            timeout=30,
+            env={**os.environ, "LD_PRELOAD": str(library)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        base = "file:///tmp/com.freerdp.client.cliprdr.1/2/"
+        # Top-level entries only: the folder brings its contents along.
+        self.assertEqual(result.stdout.decode(),
+                         base + "%5BEUR%5D%20folder\r\n"
+                         + base + "%C3%96dev%201.txt\r\n")
 
 
 if __name__ == "__main__":
