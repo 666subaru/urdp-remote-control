@@ -122,7 +122,10 @@ def load(path: str | Path) -> Profile:
     p.auto_reconnect = flag("autoreconnection enabled", True)
     p.compression = flag("compression", True)
 
-    p.cert_policy = _CERT.get(num("authentication level", 2) or 0, "warn")
+    # A file must not switch certificate checking off: "connect anyway" is
+    # exactly what a man-in-the-middle needs.  It can still be chosen by hand.
+    cert = _CERT.get(num("authentication level", 2) or 0, "warn")
+    p.cert_policy = "warn" if cert == "connect" else cert
     p.admin_session = flag("administrative session", False)
     p.restricted_admin = flag("restrictedadmin", False)
     p.gateway_host = text("gatewayhostname")

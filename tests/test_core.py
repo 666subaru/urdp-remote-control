@@ -180,8 +180,8 @@ class ClipfixTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from PyQt6.QtGui import QGuiApplication
-        cls.app = QGuiApplication.instance() or QGuiApplication([])
+        from PyQt6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
 
     def _mime(self, **formats):
         from PyQt6.QtCore import QMimeData
@@ -219,8 +219,8 @@ class RepairerTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from PyQt6.QtGui import QGuiApplication
-        cls.app = QGuiApplication.instance() or QGuiApplication([])
+        from PyQt6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
 
     def _fake(self, good_png=False):
         from PyQt6.QtCore import QMimeData, QObject, pyqtSignal
@@ -354,7 +354,7 @@ class RdpFileTest(unittest.TestCase):
                            color_depth=24, network="lan", wallpaper=False,
                            menu_anims=False, audio_mode="remote",
                            microphone=True, keyboard_mode="remote",
-                           cert_policy="connect", admin_session=True)
+                           cert_policy="refuse", admin_session=True)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "test.rdp"
             rdpfile.save(original, path)
@@ -384,7 +384,32 @@ class RdpFileTest(unittest.TestCase):
         self.assertEqual(profile.username, "admin")
         self.assertTrue(profile.multimon)
         self.assertFalse(profile.wallpaper)
-        self.assertEqual(profile.cert_policy, "connect")
+        # A file may not turn certificate checking off.
+        self.assertEqual(profile.cert_policy, "warn")
+
+    def test_risky_import_is_listed_and_can_be_undone(self):
+        from PyQt6.QtWidgets import QApplication
+        from urdp.mainwindow import ImportReviewDialog
+        global _qt_app
+        _qt_app = QApplication.instance() or QApplication([])
+        text = ("full address:s:fs.example\r\n"
+                "drivestoredirect:s:*\r\n"
+                "audiocapturemode:i:1\r\n"
+                "gatewayhostname:s:gw.evil\r\n"
+                "gatewayusagemethod:i:1\r\n")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "x.rdp"
+            path.write_text(text, encoding="utf-8")
+            profile = rdpfile.load(path)
+        sharing, other = ImportReviewDialog.items(profile)
+        self.assertEqual(len(sharing), 2)
+        self.assertTrue(any("gw.evil" in o for o in other))
+        with unittest.mock.patch.object(ImportReviewDialog, "exec",
+                                        lambda self: (self._turn_off(), 1)[1]):
+            self.assertTrue(ImportReviewDialog.review(profile))
+        self.assertFalse(profile.home_drive or profile.microphone)
+        self.assertTrue(profile.gateway_enabled)
+        self.assertEqual(ImportReviewDialog.items(Profile(host="pc")), ([], []))
 
 
 class ProfileTest(unittest.TestCase):
@@ -611,6 +636,40 @@ class FileListShimTest(unittest.TestCase):
                                            {"XDG_CACHE_HOME": self.tmp.name})
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_server_names_cannot_leave_the_transfer_directory(self):
+        import shutil
+        import subprocess
+        compiler = next((c for c in ("cc", "gcc", "clang")
+                         if shutil.which(c)), None)
+        if compiler is None:
+            self.skipTest("no C compiler")
+        harness = Path(self.tmp.name) / "h.c"
+        harness.write_text(
+            f'#include "{fileshim.SOURCE}"\n#include <stdio.h>\n'
+            "static void name(unsigned char *d, int i, const char *s) {\n"
+            "  unsigned char *n = d + 4 + i * DESCRIPTOR_SIZE + NAME_OFFSET;\n"
+            "  for (int k = 0; s[k]; k++) n[2 * k] = (unsigned char)s[k];\n}\n"
+            "int main(void) {\n"
+            "  const char *names[] = {\"../../.ssh/id\", \"a/b\", \"..\", \".\",\n"
+            "                         \"ok.txt\"};\n"
+            "  uint32_t size = 4 + 5 * DESCRIPTOR_SIZE, out = 0;\n"
+            "  unsigned char *d = calloc(1, size); d[0] = 5;\n"
+            "  for (int i = 0; i < 5; i++) name(d, i, names[i]);\n"
+            "  char *r = build_list(d, size, \"/t/x\", \"\", \"\\n\", 0, &out);\n"
+            "  fputs(r ? r : \"NULL\", stdout); return 0;\n}\n")
+        binary = Path(self.tmp.name) / "h"
+        subprocess.run([compiler, "-o", str(binary), str(harness), "-ldl",
+                        "-lpthread"], check=True, capture_output=True)
+        result = subprocess.run([str(binary)], capture_output=True, text=True,
+                                timeout=10)
+        self.assertEqual(result.stdout, "file:///t/x/ok.txt\n")
+
+    def test_cache_not_private_is_refused(self):
+        cache = Path(self.tmp.name) / "urdp"
+        cache.mkdir()
+        os.chmod(cache, 0o777)
+        self.assertEqual(fileshim.ensure()[0], None)
 
     def test_bundled_library_wins_over_building(self):
         lib = Path(self.tmp.name) / "libfilelist.so"

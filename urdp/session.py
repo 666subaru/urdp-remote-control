@@ -218,11 +218,14 @@ class Session(QObject):
         self._log = None
         path = log_path()
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             if path.exists():
                 path.replace(path.with_suffix(".prev.log"))
-            handle = open(path, "w", encoding="utf-8")
-            os.chmod(path, 0o600)
+            # Created 0600 in one step, and never through a symlink: the log
+            # holds the user name, the server and the whole command line.
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                         | os.O_NOFOLLOW, 0o600)
+            handle = os.fdopen(fd, "w", encoding="utf-8")
         except OSError:
             return
         stamp = datetime.datetime.now().isoformat(timespec="seconds")

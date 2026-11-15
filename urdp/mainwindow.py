@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
@@ -67,6 +68,85 @@ class CommandDialog(QDialog):
         close.clicked.connect(self.accept)
 
 
+class ImportReviewDialog(QDialog):
+    """Lists what an imported .rdp file switches on, as mstsc does.
+
+    A downloaded file can share the home folder, the microphone, smart cards
+    and serial ports, or route the connection -- and the password -- through
+    a gateway of its choosing.  None of that should happen unseen.
+    """
+
+    #: (profile attribute, label) for the redirections the dialog can undo.
+    SHARING = (("home_drive", "Home folder"),
+               ("microphone", "Remote audio recording (redirect the microphone)"),
+               ("smartcard", "Smart cards"),
+               ("serial", "Serial ports"))
+
+    @classmethod
+    def items(cls, profile: Profile) -> tuple[list[str], list[str]]:
+        """(sharing labels, other labels) that need the user's attention."""
+        sharing = [_(label) for attr, label in cls.SHARING
+                   if getattr(profile, attr)]
+        other = []
+        if profile.gateway_enabled and profile.gateway_host:
+            other.append(_("Use a Remote Desktop Gateway server") + ": "
+                         + profile.gateway_host)
+        if profile.remote_app and profile.remote_app_program:
+            other.append(_("Program:") + " " + profile.remote_app_program)
+        return sharing, other
+
+    @classmethod
+    def review(cls, profile: Profile, parent: QWidget | None = None) -> bool:
+        """False when the user cancels the import."""
+        sharing, other = cls.items(profile)
+        if not (sharing or other):
+            return True
+        dialog = cls(sharing, other, parent)
+        result = dialog.exec()
+        if result == QDialog.DialogCode.Rejected:
+            return False
+        if dialog.turn_off:
+            for attr, _label in cls.SHARING:
+                setattr(profile, attr, False)
+        return True
+
+    def __init__(self, sharing: list[str], other: list[str],
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.turn_off = False
+        self.setWindowTitle(_("Check the imported file"))
+        self.setMinimumWidth(460)
+        layout = QVBoxLayout(self)
+        intro = QLabel(_("This file turns on the items below. Keep them only "
+                         "if you trust where the file came from."))
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        listing = QLabel("\n".join("• " + item for item in sharing + other))
+        listing.setTextFormat(Qt.TextFormat.PlainText)
+        listing.setWordWrap(True)
+        layout.addWidget(listing)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        off = QPushButton(_("Turn off sharing"))
+        keep = QPushButton(_("Keep"))
+        cancel = QPushButton(_("Cancel"))
+        if sharing:
+            buttons.addWidget(off)
+            off.setDefault(True)
+        buttons.addWidget(keep)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+        off.clicked.connect(self._turn_off)
+        keep.clicked.connect(self.accept)
+        cancel.clicked.connect(self.reject)
+
+    def _turn_off(self) -> None:
+        self.turn_off = True
+        self.accept()
+
+
 class CredentialDialog(QDialog):
     """Asks for the password, with the "remember me" box Windows shows.
 
@@ -91,8 +171,14 @@ class CredentialDialog(QDialog):
         title.setFont(font)
         layout.addWidget(title)
 
-        target = QLabel(_("These credentials will be used to connect to "
-                          "<b>{host}</b>.").format(host=profile.host))
+        # The host may come from a downloaded .rdp file: never rich text.
+        text = _("These credentials will be used to connect to "
+                 "<b>{host}</b>.").format(host=html.escape(profile.host))
+        if profile.gateway_enabled and profile.gateway_host:
+            text += " " + _("They also go to the gateway <b>{gateway}</b>.").format(
+                gateway=html.escape(profile.gateway_host))
+        target = QLabel(text)
+        target.setTextFormat(Qt.TextFormat.RichText)
         target.setObjectName("hint")
         target.setWordWrap(True)
         layout.addWidget(target)
@@ -400,6 +486,8 @@ class MainWindow(QMainWindow):
     def new_profile(self) -> None:
         self._collect()
         profile = Profile()
+        if not ImportReviewDialog.review(profile, self):
+            return
         self.profiles.append(profile)
         self.current = profile
         self._refresh_profile_list(len(self.profiles) - 1)

@@ -150,7 +150,11 @@ static char* build_list(const unsigned char* data, uint32_t size, const char* ba
 		const unsigned char* name = data + 4 + (size_t)i * DESCRIPTOR_SIZE + NAME_OFFSET;
 		char utf8[NAME_CHARS * 4 + 1];
 		int n = name_to_utf8(name, utf8, sizeof(utf8));
-		if (n <= 0 || strchr(utf8, '\\'))
+		/* Top-level entries are single names.  A server that sends "a\\b",
+		 * "a/b", "." or ".." would point the paste outside the transfer
+		 * directory, so such entries are dropped. */
+		if (n <= 0 || strchr(utf8, '\\') || strchr(utf8, '/') ||
+		    strcmp(utf8, ".") == 0 || strcmp(utf8, "..") == 0)
 			continue;
 		if (lines++ && !put_str(&b, ending))
 			goto fail;

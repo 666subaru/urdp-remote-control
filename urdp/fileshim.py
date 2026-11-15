@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -34,6 +35,24 @@ def library_path(source: Path = SOURCE) -> Path:
     return cache_dir() / f"libfilelist-{digest}.so"
 
 
+def _private(path: Path) -> bool:
+    """Owned by us and writable by nobody else -- or not there yet.
+
+    The cached library is preloaded into xfreerdp3, so whoever can write it
+    runs code as this user.  That only matters when XDG_CACHE_HOME points
+    somewhere shared, but then it matters a lot.
+    """
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode) or st.st_uid != os.getuid():
+        return False
+    return not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+
+
 def ensure(source: Path = SOURCE) -> tuple[Path | None, str]:
     """Return (library, note).  The library is None when it cannot be built."""
     if source == SOURCE and PREBUILT.is_file():
@@ -42,13 +61,17 @@ def ensure(source: Path = SOURCE) -> tuple[Path | None, str]:
         target = library_path(source)
     except OSError as exc:
         return None, f"source missing: {exc}"
+    if not _private(target.parent):
+        return None, "cache directory is not private"
     if target.exists():
+        if not _private(target):
+            return None, "cached library is not private"
         return target, "cached"
     compiler = next((c for c in ("cc", "gcc", "clang") if shutil.which(c)), None)
     if compiler is None:
         return None, "no C compiler"
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         partial = target.with_suffix(f".{os.getpid()}.tmp")
         result = subprocess.run(
             [compiler, "-O2", "-shared", "-fPIC", "-o", str(partial),
