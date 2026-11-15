@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                              QFileDialog, QFormLayout, QHBoxLayout,
@@ -13,7 +13,8 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                              QScrollArea, QStatusBar, QTabWidget, QVBoxLayout,
                              QWidget)
 
-from . import capabilities, i18n, keyring, probe, rdpfile, store
+from . import capabilities, deps, i18n, keyring, probe, rdpfile, store
+from .depsdialog import DepsDialog
 from .i18n import _
 from .profile import Profile
 from .rdpcmd import command_string, find_client, validate
@@ -30,6 +31,9 @@ from .widgets import Banner, app_icon, separator
 RESTART_CODE = 77
 
 APP_NAME = "URDP Remote Control"
+
+#: The install offer appears once per run, not again after a language change.
+_offered_install = False
 
 
 class CommandDialog(QDialog):
@@ -233,6 +237,8 @@ class MainWindow(QMainWindow):
 
         self.setStatusBar(QStatusBar())
         self._check_client()
+        if not deps.freerdp_ok():
+            QTimer.singleShot(0, self.offer_install)
 
         # -------------------------------------------------------- plumbing
         self.btn_options.clicked.connect(self.toggle_options)
@@ -268,6 +274,20 @@ class MainWindow(QMainWindow):
         area.setWidget(page)
         area.setFrameShape(QScrollArea.Shape.NoFrame)
         return area
+
+    def offer_install(self) -> None:
+        """Name the missing packages and offer to install them."""
+        global _offered_install                     # noqa: PLW0603
+        if _offered_install:
+            return
+        _offered_install = True
+        plan = deps.missing_plan()
+        if plan is None:
+            return
+        dialog = DepsDialog(plan, not deps.freerdp_ok(), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.btn_connect.setEnabled(bool(find_client()))
+            self._check_client()
 
     def _check_client(self) -> None:
         if not find_client():

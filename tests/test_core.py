@@ -485,6 +485,36 @@ class ProbeTest(unittest.TestCase):
         self.assertFalse(probe.check("", 3389).reachable)
 
 
+class DepsTest(unittest.TestCase):
+    def test_family_from_os_release(self):
+        from urdp import deps
+        cases = {
+            'ID=cachyos\nID_LIKE=arch\n': "arch",
+            'ID=ubuntu\nID_LIKE="debian"\n': "debian",
+            'ID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n': "suse",
+            'ID=fedora\n': "fedora",
+            'ID=nobara\nID_LIKE="rhel centos fedora"\n': "fedora",
+            'ID=gentoo\n': None,
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(deps.family(deps.parse_os_release(text)),
+                                 expected)
+
+    def test_plan(self):
+        from urdp import deps
+        self.assertIsNone(deps.plan(False, False, "arch"))
+        p = deps.plan(True, True, "debian")
+        self.assertEqual(p.packages, ("freerdp3-x11", "libsecret-tools"))
+        self.assertEqual(p.command,
+                         "sudo apt-get install -y freerdp3-x11 libsecret-tools")
+        p = deps.plan(False, True, "arch")
+        self.assertEqual(p.argv, ("pacman", "-S", "--needed", "--noconfirm",
+                                  "libsecret"))
+        unknown = deps.plan(True, False, "")
+        self.assertEqual((unknown.argv, unknown.command), ((), ""))
+
+
 class TranslationTest(unittest.TestCase):
     """Locale files must stay in step with the strings in the source."""
 

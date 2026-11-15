@@ -62,6 +62,11 @@ Debian/Ubuntu'nun eski sürümlerinde durum budur, Flatpak sürümü
 başlatıcının `xfreerdp3`'ü bulabilmesi için PATH'e bir sarmalayıcı koymanız
 gerekir.
 
+Uygulama açılırken FreeRDP 3 yoksa dağıtımınıza (Arch, Debian/Ubuntu, Fedora,
+openSUSE aileleri) uygun paketleri gösterir ve kurmayı önerir. **Kur** düğmesi
+paket yöneticisini `pkexec` ile çalıştırır, parolayı pkexec kendisi sorar; o
+tıklama olmadan hiçbir şey kurulmaz.
+
 ## Kurulum
 
 Depo içinden:

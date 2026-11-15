@@ -62,6 +62,11 @@ It must print `3.x`. If it does not, your distribution has no FreeRDP 3 package
 (`flatpak install flathub com.freerdp.FreeRDP`) works, but then you need a
 wrapper named `xfreerdp3` somewhere on your `PATH`.
 
+If FreeRDP 3 is missing when the application starts, it names the packages for
+your distribution (Arch, Debian/Ubuntu, Fedora, openSUSE families) and offers to
+install them. **Install** runs the package manager through `pkexec`, which asks
+for your password itself; nothing is installed without that click.
+
 ## Install
 
 From inside the repository:
