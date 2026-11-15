@@ -612,6 +612,14 @@ class FileListShimTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_bundled_library_wins_over_building(self):
+        lib = Path(self.tmp.name) / "libfilelist.so"
+        lib.write_bytes(b"")
+        with unittest.mock.patch.object(fileshim, "PREBUILT", lib), \
+                unittest.mock.patch.object(fileshim.shutil, "which",
+                                           return_value=None):
+            self.assertEqual(fileshim.ensure(), (lib, "bundled"))
+
     def test_preload_keeps_existing_entries_once(self):
         lib = Path("/c/libfilelist-x.so")
         self.assertEqual(fileshim.preload_value(lib, None), str(lib))

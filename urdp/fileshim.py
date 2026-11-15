@@ -19,6 +19,9 @@ import subprocess
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent / "native" / "filelist.c"
+#: Built from SOURCE at packaging time (the AppImage ships one), so machines
+#: without a C compiler still get the fix.  Never present in a source checkout.
+PREBUILT = SOURCE.with_name("libfilelist.so")
 
 
 def cache_dir() -> Path:
@@ -33,6 +36,8 @@ def library_path(source: Path = SOURCE) -> Path:
 
 def ensure(source: Path = SOURCE) -> tuple[Path | None, str]:
     """Return (library, note).  The library is None when it cannot be built."""
+    if source == SOURCE and PREBUILT.is_file():
+        return PREBUILT, "bundled"
     try:
         target = library_path(source)
     except OSError as exc:

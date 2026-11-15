@@ -69,6 +69,24 @@ for your password itself; nothing is installed without that click.
 
 ## Install
 
+### AppImage
+
+Download `URDP-Remote-Control-x86_64.AppImage` from the
+[Releases](https://github.com/666subaru/urdp-remote-control/releases) page, then:
+
+```bash
+chmod +x URDP-Remote-Control-x86_64.AppImage
+./URDP-Remote-Control-x86_64.AppImage
+```
+
+It carries Python, PyQt6 and the file-copy fix, so no compiler is needed.
+FreeRDP is **not** inside: it handles everything a remote server sends and gets
+security updates often, so it stays a system package that your distribution
+keeps patched. If it is missing, the application offers to install it (see
+above).
+
+### From the repository
+
 From inside the repository:
 
 ```bash

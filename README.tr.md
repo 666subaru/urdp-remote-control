@@ -69,6 +69,23 @@ tıklama olmadan hiçbir şey kurulmaz.
 
 ## Kurulum
 
+### AppImage
+
+[Releases](https://github.com/666subaru/urdp-remote-control/releases)
+sayfasından `URDP-Remote-Control-x86_64.AppImage` dosyasını indirin, sonra:
+
+```bash
+chmod +x URDP-Remote-Control-x86_64.AppImage
+./URDP-Remote-Control-x86_64.AppImage
+```
+
+İçinde Python, PyQt6 ve dosya kopyalama düzeltmesi var, derleyici gerekmez.
+FreeRDP **içinde değil**: uzak sunucudan gelen her şeyi o işliyor ve sık
+güvenlik güncellemesi alıyor, bu yüzden dağıtımınızın güncel tuttuğu sistem
+paketi olarak kalıyor. Eksikse uygulama kurmayı önerir (yukarıya bakın).
+
+### Depodan
+
 Depo içinden:
 
 ```bash
