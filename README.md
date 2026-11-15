@@ -188,7 +188,15 @@ The **Test** button on the General tab runs the same probe before you connect.
   manager pastes nothing. `urdp/native/filelist.c`, preloaded into `xfreerdp3`,
   builds that list itself whenever FreeRDP returns none. It is compiled once
   with the system C compiler (`cc`) and cached in `~/.cache/urdp/`; without a
-  compiler the session still runs, only without this fix.
+  compiler the session still runs, only without this fix. FreeRDP 3.33 fixed
+  the conversion itself, and the library then stays out of the way.
+
+- **Copying large files to Windows.** `xfreerdp3` drops its list of local files
+  whenever the X selection is announced again, which a Wayland desktop does when
+  the session window loses focus, even though nothing new was copied. Windows
+  then fails mid-copy with "unspecified error". The same preloaded library keeps
+  the list unless the server itself announces new clipboard content. Copying
+  something else on Windows during a transfer still aborts it.
 
 - The Windows side must be a **Pro / Enterprise / Education** edition. Home has
   no RDP server.

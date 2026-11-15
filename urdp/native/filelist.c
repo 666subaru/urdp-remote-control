@@ -12,9 +12,13 @@
  * This library wraps ClipboardGetData.  When winpr returns nothing for a
  * file-list format, it builds the list itself from the descriptors and the
  * exposed path.  If winpr succeeds (a fixed release), it is never involved.
+ *
+ * It also keeps a Linux -> Windows copy alive; see cliprdr_file_context_clear
+ * at the end of this file.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -211,4 +215,47 @@ void* ClipboardGetData(wClipboard* clipboard, uint32_t formatId, uint32_t* pSize
 	if (!result)
 		*pSize = 0;
 	return result;
+}
+
+/*
+ * Linux -> Windows: keep the file list while Windows is still reading it.
+ *
+ * xfreerdp drops its list of local files whenever the X selection changes
+ * owner.  On a Wayland desktop that happens without anything new being
+ * copied: when the session window loses focus the compositor announces the
+ * same clipboard again.  Windows, in the middle of pulling a large file, then
+ * gets "missing entry" for its next read and aborts the copy.
+ *
+ * The drop is only needed when the *server* announces new content; a new
+ * local file list replaces the old one by itself in
+ * cliprdr_file_context_update_client_data.  So a clear is passed on when it
+ * comes from the thread that handles server format lists and skipped when it
+ * comes from the X event thread.
+ */
+typedef struct CliprdrFileContext CliprdrFileContext;
+typedef int (*FileContextFn)(CliprdrFileContext*);
+
+static pthread_t server_thread;
+static volatile int server_thread_known;
+
+int cliprdr_file_context_notify_new_server_format_list(CliprdrFileContext* file)
+{
+	static FileContextFn real;
+	if (!real)
+		real = (FileContextFn)dlsym(RTLD_NEXT, "cliprdr_file_context_notify_new_server_format_list");
+	server_thread = pthread_self();
+	server_thread_known = 1;
+	return real ? real(file) : 0;
+}
+
+int cliprdr_file_context_clear(CliprdrFileContext* file)
+{
+	static FileContextFn real;
+	if (!real)
+		real = (FileContextFn)dlsym(RTLD_NEXT, "cliprdr_file_context_clear");
+	/* Before the first server format list there is nothing of the server's
+	 * to drop, so an unknown thread is treated like the X event thread. */
+	if (server_thread_known && pthread_equal(pthread_self(), server_thread))
+		return real ? real(file) : 0;
+	return 1;
 }

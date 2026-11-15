@@ -612,11 +612,14 @@ class FileListShimTest(unittest.TestCase):
             timeout=30,
             env={**os.environ, "LD_PRELOAD": str(library)})
         self.assertEqual(result.returncode, 0, result.stderr)
+        # A winpr that converts the list itself answers before the shim does
+        # and escapes less, so compare the decoded paths.
+        from urllib.parse import unquote
         base = "file:///tmp/com.freerdp.client.cliprdr.1/2/"
         # Top-level entries only: the folder brings its contents along.
-        self.assertEqual(result.stdout.decode(),
-                         base + "%5BEUR%5D%20folder\r\n"
-                         + base + "%C3%96dev%201.txt\r\n")
+        self.assertEqual(unquote(result.stdout.decode()).rstrip("\0"),
+                         base + "[EUR] folder\r\n"
+                         + base + "Ödev 1.txt\r\n")
 
 
 if __name__ == "__main__":

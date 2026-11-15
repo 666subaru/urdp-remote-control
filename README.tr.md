@@ -189,7 +189,15 @@ Aynı yoklamayı Genel sekmesindeki **Sına** düğmesiyle bağlanmadan önce de
   `xfreerdp3`'e önceden yüklenen `urdp/native/filelist.c`, FreeRDP liste
   üretemediğinde listeyi kendisi oluşturur. Sistem C derleyicisiyle (`cc`) bir
   kez derlenip `~/.cache/urdp/` altında saklanır; derleyici yoksa oturum yine
-  çalışır, yalnızca bu düzeltme olmaz.
+  çalışır, yalnızca bu düzeltme olmaz. FreeRDP 3.33 çeviriyi kendisi düzeltti;
+  o sürümde kütüphane araya girmez.
+
+- **Windows'a büyük dosya kopyalamak.** `xfreerdp3`, X seçimi her yeniden
+  duyurulduğunda yerel dosya listesini siler; Wayland masaüstü bunu oturum
+  penceresi odağı kaybedince, yeni bir şey kopyalanmasa da yapar. Windows da
+  kopyalamanın ortasında "belirtilmemiş hata" verir. Aynı kütüphane, sunucu
+  yeni pano içeriği duyurmadıkça listeyi korur. Aktarım sırasında Windows'ta
+  başka bir şey kopyalamak aktarımı yine keser.
 
 - Windows tarafı **Pro / Enterprise / Education** olmalıdır. Home sürümünde RDP
   sunucusu yoktur.
