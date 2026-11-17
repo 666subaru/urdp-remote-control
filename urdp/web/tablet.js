@@ -158,36 +158,41 @@ function where(ev) {
   return [unit((ev.clientX - r.left) / r.width), unit((ev.clientY - r.top) / r.height)];
 }
 
-function penMessage(ev, phase) {
-  const [x, y] = where(ev);
+// *sample* is a coalesced event: its position and pressure are used, the
+// buttons come from the real event *ev*.
+function penMessage(sample, phase, ev = sample) {
+  const [x, y] = where(sample);
   const rubber = ev.button === 5 || (ev.buttons & 32) !== 0;
   const barrel = (ev.buttons & 2) !== 0;
-  const pressure = ev.pointerType === 'pen' ? ev.pressure : 0.5;
+  let pressure = sample.pointerType === 'pen' ? sample.pressure : 0.5;
+  if (phase === 'm' && !(pressure > 0)) pressure = ev.pressure || 0.5;
   return ['p', phase, x, y, Math.round(pressure * 1000) / 1000,
           ev.tiltX || 0, ev.tiltY || 0, barrel ? 1 : 0, rubber ? 1 : 0];
 }
 
-function touching(ev) {
-  if (ev.pointerType === 'pen') return ev.pressure > 0 || (ev.buttons & 33) !== 0;
-  return (ev.buttons & 7) !== 0;                 // a mouse on the tablet
-}
+// Whether the pen (or a mouse button) is down is decided by pointerdown and
+// pointerup alone.  Chrome's coalesced in-between samples can carry pressure
+// 0 and no buttons, and reading those as "lifted" broke every stroke.
+const penDown = new Set();
 
 function directDown(ev) {
-  if (ev.pointerType === 'touch') post(['t', 'd', ev.pointerId, ...where(ev)]);
-  else post(penMessage(ev, 'd'));
+  if (ev.pointerType === 'touch') { post(['t', 'd', ev.pointerId, ...where(ev)]); return; }
+  penDown.add(ev.pointerId);
+  post(penMessage(ev, 'd'));
 }
 
 function directMove(ev) {
   const events = ev.getCoalescedEvents ? ev.getCoalescedEvents() : [];
   for (const e of events.length ? events : [ev]) {
     if (ev.pointerType === 'touch') post(['t', 'm', ev.pointerId, ...where(e)]);
-    else post(penMessage(e, touching(e) ? 'm' : 'h'));
+    else post(penMessage(e, penDown.has(ev.pointerId) ? 'm' : 'h', ev));
   }
 }
 
 function directUp(ev) {
-  if (ev.pointerType === 'touch') post(['t', 'u', ev.pointerId, ...where(ev)]);
-  else post(penMessage(ev, touching(ev) ? 'm' : 'u'));
+  if (ev.pointerType === 'touch') { post(['t', 'u', ev.pointerId, ...where(ev)]); return; }
+  penDown.delete(ev.pointerId);
+  post(penMessage(ev, 'u'));
 }
 
 function directLeave(ev) {

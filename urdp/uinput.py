@@ -265,9 +265,7 @@ class TabletInput:
             self._rubber = rubber
             dev.emit(EV_KEY, BTN_TOOL_RUBBER if rubber else BTN_TOOL_PEN, 1)
             self._pen_in = True
-        down = phase in ("down", "move") and (phase == "down" or self._pen_down)
-        if phase == "up":
-            down = False
+        down = phase in ("down", "move")   # "move" comes only while down
         # The barrel button goes in a frame of its own: pressed before the tip
         # touches and released after it lifts.  In one frame libinput reports
         # the tip first, and Qt then makes a left click of a barrel tap.
@@ -322,8 +320,10 @@ class TabletInput:
             if self._buttons:
                 self._mouse(x, y, 0)
             return
-        held = phase in ("down", "move") and (phase == "down" or self._buttons)
-        self._mouse(x, y, (2 if barrel else 1) if held else 0)
+        # The page sends "move" only while the pen is down.
+        held = phase in ("down", "move")
+        buttons = self._buttons or (2 if barrel else 1)   # keep the one pressed
+        self._mouse(x, y, buttons if held else 0)
 
     def touch_as_mouse(self, phase: str, ident: int, x: float,
                        y: float) -> None:
