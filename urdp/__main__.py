@@ -7,7 +7,7 @@ import sys
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
-from . import i18n, store, theme
+from . import i18n, store, tabletdialog, theme
 from .mainwindow import RESTART_CODE, MainWindow
 from .widgets import app_icon
 
@@ -41,6 +41,7 @@ def main() -> int:
         window.show()
         code = app.exec()
         if code != RESTART_CODE:
+            tabletdialog.shutdown()
             return code
         window.deleteLater()
 

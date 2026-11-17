@@ -31,6 +31,7 @@ arayüzdür.** FreeRDP kurulu değilse hiçbir şey yapamaz, o yüzden ilk şart
 | **FreeRDP 3** (`xfreerdp3`) | Bağlantıyı asıl kuran program | **Evet** |
 | **PyQt6** | Arayüz | **Evet** |
 | `libsecret` (`secret-tool`) | Parolayı KDE Cüzdan / GNOME Keyring'de saklamak | Hayır, ama parola kaydetme onsuz çalışmaz |
+| `krfb` (`krfb-virtualmonitor`) | Tablet ekranı (yalnız KDE Plasma Wayland) | Hayır |
 
 FreeRDP **3** gerekiyor. FreeRDP 2 birçok seçeneği farklı yazar
 (`/cert-tofu`, `/monitor-list` gibi); uygulama eski bir sürüm bulursa durum
@@ -156,6 +157,35 @@ Beş sekmedeki her mstsc seçeneğinin karşılığı vardır. Ek olarak:
 Karşılığı olmayan tek şey mstsc'nin "Uzak bilgisayarda oturum açmak için bir web
 hesabı kullan" seçeneğidir; FreeRDP'nin Azure AD/Entra akışı farklı çalışır.
 
+## Tablet ekranı — tablet ya da telefon ek monitör olarak
+
+KDE Plasma'da (Wayland) alt çubuktaki **Tablet Ekranı**, aynı ağdaki bir tableti
+ya da telefonu bu bilgisayarın bir monitörü yapar: pencereler ona her ekrana
+olduğu gibi taşınır, dokunma ve kalem fare olarak çalışır. Tablette yalnızca
+tarayıcı gerekir: QR kodu kamerasıyla okutun ya da adresi açıp kodu yazın.
+
+Nasıl çalışır: `krfb-virtualmonitor` (`krfb` paketi) KWin'den sanal bir ekran
+ister ve onu rastgele bir yerel portta VNC ile yayınlar. URDP,
+[noVNC](https://github.com/novnc/noVNC) üzerine kurulu bir sayfa sunar ve
+sayfanın WebSocket'ini bu VNC sunucusuna bağlar; böylece ağdan erişilmesi
+gereken **tek bir port** vardır (varsayılan 1701).
+
+- **Boyut.** "Tablete uydur (keskin)" ekranı tabletin gerçek piksellerine göre
+  açar ve tablet gibi ölçekler (2960 × 1848 bir tablet 2× ölçekli 1480 × 924
+  ekran olur); "daha hafif" ölçeklemeyi atlar, böyle bir tablette pikselin dörtte birini gönderir. Tableti
+  döndürmek ekranı yeniden boyutlandırır.
+- **Konum.** Mevcut ekranların sağı, solu, üstü ya da altı.
+- **Erişim.** noVNC dosyaları dışında her şey kod ister. Kod adresin `#`
+  kısmında taşınır (sunucuya ve Referer'a gitmez), sonra tablet tarayıcısında
+  saklanır. 20 yanlış koddan sonra paylaşım yeniden başlatılana kadar erişim
+  kapanır. **Yeni Kod** herkesin bağlantısını keser. Bağlantı düz HTTP'dir; ev
+  ya da ofis ağı içindir.
+- **Güvenlik duvarı.** Etkinse portu yerel ağa açın, örneğin
+  `sudo ufw allow from 192.168.1.0/24 to any port 1701 proto tcp`.
+- **VPN.** Yerel ağın yolunu üstlenen bir VPN (örneğin kendi ağınızın alt ağ
+  yolunu kabul eden Tailscale) tablete giden cevapları tünele yollar; pencere
+  bunu fark edince uyarır.
+
 ## Kodekler — H.265 var mı?
 
 Yok. RDP protokolünde H.265/HEVC diye bir kodek tanımlı değil; tavan H.264
@@ -257,7 +287,13 @@ Kod düzeni:
 | `theme.py` / `widgets.py` | Karanlık tema ve ortak parçalar |
 | `tab_*.py` | Beş sekme |
 | `mainwindow.py` | Pencere, profil yönetimi, bağlanma akışı |
+| `tablet.py`, `tabletdialog.py`, `web/` | Tablet ekranı: sanal ekran, web sunucusu, sayfa |
+| `qr.py` | Tablet adresi için küçük QR üreticisi |
 
 ## Lisans
 
 MIT — `LICENSE` dosyasındaki telif sahibi adını kendinizle değiştirin.
+
+`urdp/web/novnc/`, noVNC 1.7.0'ın değiştirilmemiş bir kopyasıdır (`core/` ve
+`vendor/pako/`); MPL 2.0, pako için MIT lisanslıdır, o klasördeki lisans
+dosyalarına bakın.

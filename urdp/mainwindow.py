@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                              QScrollArea, QStatusBar, QTabWidget, QVBoxLayout,
                              QWidget)
 
-from . import capabilities, deps, i18n, keyring, probe, rdpfile, store
+from . import capabilities, deps, i18n, keyring, probe, rdpfile, store, tablet
 from .depsdialog import DepsDialog
 from .i18n import _
 from .profile import Profile
@@ -25,6 +25,7 @@ from .tab_display import DisplayTab
 from .tab_experience import ExperienceTab
 from .tab_general import GeneralTab
 from .tab_local import LocalResourcesTab
+from .tabletdialog import TabletDialog
 from .widgets import Banner, app_icon, separator
 
 #: Exit code that asks ``__main__`` to build the window again, which is how a
@@ -312,13 +313,22 @@ class MainWindow(QMainWindow):
         bar_layout.addWidget(self.language)
         bar_layout.addStretch(1)
 
+        self.btn_tablet = QPushButton(_("Tablet Screen"))
+        self.btn_tablet.setToolTip(_(
+            "Use a tablet or phone on the same network as an extra screen. "
+            "Scan the code with its camera, or open the address in its "
+            "browser."))
+        # The virtual screen comes from KWin; other desktops cannot make one.
+        self.btn_tablet.setVisible(tablet.desktop_ok())
         self.btn_command = QPushButton(_("Show Command"))
         self.btn_help = QPushButton(_("Help"))
         self.btn_connect = QPushButton(_("Connect"))
         self.btn_connect.setObjectName("primary")
         self.btn_connect.setDefault(True)
-        for button in (self.btn_command, self.btn_help, self.btn_connect):
+        for button in (self.btn_tablet, self.btn_command, self.btn_help,
+                       self.btn_connect):
             bar_layout.addWidget(button)
+        self._tablet_dialog: TabletDialog | None = None
         root.addWidget(bar)
 
         self.setStatusBar(QStatusBar())
@@ -328,6 +338,7 @@ class MainWindow(QMainWindow):
 
         # -------------------------------------------------------- plumbing
         self.btn_options.clicked.connect(self.toggle_options)
+        self.btn_tablet.clicked.connect(self.show_tablet)
         self.btn_command.clicked.connect(self.show_command)
         self.btn_help.clicked.connect(self.show_help)
         self.btn_connect.clicked.connect(self.connect_now)
@@ -623,6 +634,13 @@ class MainWindow(QMainWindow):
             box.setDetailedText(_("Resolved addresses:") + "\n"
                                 + "\n".join(result.addresses))
         box.exec()
+
+    def show_tablet(self) -> None:
+        if self._tablet_dialog is None:
+            self._tablet_dialog = TabletDialog(self)
+        self._tablet_dialog.show()
+        self._tablet_dialog.raise_()
+        self._tablet_dialog.activateWindow()
 
     def show_command(self) -> None:
         profile = self._collect()
