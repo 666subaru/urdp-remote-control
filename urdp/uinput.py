@@ -165,10 +165,22 @@ class TabletInput:
                        (ABS_PRESSURE, 0, PRESSURE_MAX, 0),
                        (ABS_TILT_X, -90, 90, 0), (ABS_TILT_Y, -90, 90, 0)],
             props=(INPUT_PROP_DIRECT,))
+        # An absolute mouse: KWin spreads its range over the whole desktop,
+        # so set_area says where the tablet screen lies in it.
         self.wheel = Device(
-            f"{label} Wheel", keys=(BTN_LEFT, BTN_RIGHT, BTN_MIDDLE),
-            rels=(REL_X, REL_Y, REL_WHEEL, REL_HWHEEL, REL_WHEEL_HI_RES,
-                  REL_HWHEEL_HI_RES))
+            f"{label} Mouse", keys=(BTN_LEFT, BTN_RIGHT, BTN_MIDDLE),
+            rels=(REL_WHEEL, REL_HWHEEL, REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES),
+            absolutes=[(ABS_X, 0, SPAN, 0), (ABS_Y, 0, SPAN, 0)])
+        #: "mouse": pen and touch act as a mouse (works in every program);
+        #: "tablet": a real touchscreen and pen (pressure, gestures).
+        self.mode = "mouse"
+        self._area = (0.0, 0.0, 1.0, 1.0)      # x, y, w, h as desktop fractions
+        self._buttons = 0
+        self._fingers: dict[int, list[float]] = {}   # id -> [x, y, start x, start y]
+        self._finger_pressed = False
+        self._scrolling = False
+        self._scrolled = False
+        self._scroll_rest = [0.0, 0.0]
         self.keyboard = Device(f"{label} Keyboard", keys=range(1, 249))
         self._pressed: set[int] = set()
         self._keymap: dict[str, tuple[int, tuple[int, ...]]] = {}
@@ -179,6 +191,12 @@ class TabletInput:
         self._pen_down = False
         self._rubber = False
         self._barrel = False
+
+    def set_area(self, x: float, y: float, w: float, h: float,
+                 desk_w: float, desk_h: float) -> None:
+        """The tablet screen's place on the desktop, in logical pixels."""
+        if desk_w > 0 and desk_h > 0:
+            self._area = (x / desk_w, y / desk_h, w / desk_w, h / desk_h)
 
     def map_to(self, output: str) -> bool:
         ok = True
@@ -279,6 +297,90 @@ class TabletInput:
         if dx or dy:
             dev.sync()
 
+    # ------------------------------------------------------- mouse mode
+    def _point(self, x: float, y: float) -> None:
+        ax, ay, aw, ah = self._area
+        dev = self.wheel
+        dev.emit(EV_ABS, ABS_X, _clamp((ax + x * aw) * SPAN, 0, SPAN))
+        dev.emit(EV_ABS, ABS_Y, _clamp((ay + y * ah) * SPAN, 0, SPAN))
+
+    def _mouse(self, x: float, y: float, buttons: int) -> None:
+        """Move to x, y (0..1 on the tablet screen) with *buttons* held
+        (1 left, 2 right); presses come after the move, in frames of their
+        own, so programs see them at the new place."""
+        self._point(x, y)
+        self.wheel.sync()
+        for bit, code in ((1, BTN_LEFT), (2, BTN_RIGHT)):
+            if (buttons ^ self._buttons) & bit:
+                self.wheel.emit(EV_KEY, code, 1 if buttons & bit else 0)
+                self.wheel.sync()
+        self._buttons = buttons
+
+    def pen_as_mouse(self, phase: str, x: float, y: float,
+                     barrel: bool) -> None:
+        if phase == "out":
+            if self._buttons:
+                self._mouse(x, y, 0)
+            return
+        held = phase in ("down", "move") and (phase == "down" or self._buttons)
+        self._mouse(x, y, (2 if barrel else 1) if held else 0)
+
+    def touch_as_mouse(self, phase: str, ident: int, x: float,
+                       y: float) -> None:
+        """One finger: tap clicks, drag drags (the button goes down on the
+        first movement, so a second finger can still turn it into a scroll).
+        Two fingers: drag scrolls, tap right-clicks."""
+        fingers = self._fingers
+        if phase == "down":
+            fingers[ident] = [x, y, x, y]
+            if len(fingers) == 1:
+                self._scrolling = self._scrolled = False
+                self._finger_pressed = False
+                self._mouse(x, y, 0)
+            elif not self._finger_pressed:
+                self._scrolling = True
+                self._scroll_rest = [0.0, 0.0]
+            return
+        finger = fingers.get(ident)
+        if finger is None:
+            return
+        if phase == "move":
+            dx, dy = x - finger[0], y - finger[1]
+            finger[0], finger[1] = x, y
+            if self._scrolling:
+                # Each finger adds half its travel; 1/20 of the screen
+                # height is one wheel click, in the direction of the hand.
+                self._scroll_rest[0] -= dx / len(fingers) * 20
+                self._scroll_rest[1] += dy / len(fingers) * 20
+                sx, sy = self._scroll_rest
+                if abs(sx) >= 0.1 or abs(sy) >= 0.1:
+                    self.scroll(sx, sy)
+                    self._scroll_rest = [0.0, 0.0]
+                    self._scrolled = True
+                return
+            if not self._finger_pressed:
+                if abs(x - finger[2]) + abs(y - finger[3]) < 0.004:
+                    return                     # still a tap
+                self._mouse(finger[2], finger[3], 1)
+                self._finger_pressed = True
+            self._mouse(x, y, 1)
+            return
+        # up / cancel
+        del fingers[ident]
+        if self._scrolling:
+            if not fingers:
+                if not self._scrolled:
+                    self._mouse(x, y, 2)
+                    self._mouse(x, y, 0)
+                self._scrolling = False
+            return
+        if self._finger_pressed:
+            self._mouse(x, y, 0)
+        else:
+            self._mouse(finger[2], finger[3], 1)
+            self._mouse(finger[2], finger[3], 0)
+        self._finger_pressed = False
+
     # ---------------------------------------------------------- keyboard
     def key(self, code: int, down: bool) -> None:
         """A physical key of the tablet's keyboard, as an evdev code; the
@@ -320,6 +422,14 @@ class TabletInput:
     def release_all(self) -> None:
         for code in list(self._pressed):
             self.key(code, False)
+        if getattr(self, "_buttons", 0):
+            for code in (BTN_LEFT, BTN_RIGHT):
+                self.wheel.emit(EV_KEY, code, 0)
+            self.wheel.sync()
+            self._buttons = 0
+        if hasattr(self, "_fingers"):
+            self._fingers.clear()
+            self._scrolling = self._finger_pressed = False
         for ident in list(self._slots):
             self.touch_event("up", ident, 0, 0)
         self.pen_event("out", 0, 0, 0, 0, 0, False, False)

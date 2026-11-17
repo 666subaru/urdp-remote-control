@@ -176,10 +176,14 @@ gereken **tek bir port** vardır (varsayılan 1701).
   döndürmek ekranı yeniden boyutlandırır.
 - **Konum.** Mevcut ekranların sağı, solu, üstü ya da altı.
 - **Dokunma ve kalem.** `/dev/uinput` yazılabiliyorsa (logind çoğu sistemde
-  masaüstü kullanıcısına verir) URDP sanal bir dokunmatik ekran ve kalem
-  oluşturup ikisini tablet ekranına bağlar; KDE gerçek dokunma (kaydırma,
-  basılı tutma) ve basınç, eğim, havada imleç ve silgi ucuyla gerçek bir
-  kalem görür. Tabletin fiziksel klavyesi bilgisayarın kendi diziliminle
+  masaüstü kullanıcısına verir) URDP tablet ekranı için sanal giriş aygıtları
+  oluşturur. **Giriş** seçeneği davranışı belirler: *fare olarak*
+  (varsayılan; kalem ucu sol tık, yan tuş sağ tık, havada tutunca imleç
+  gider; parmakla dokunma tıklar ve sürükler, iki parmak kaydırır ya da sağ
+  tıklar) Wayland kalem desteği zayıf olan Chrome dahil her programda
+  çalışır; *dokunma ve kalem olarak* KDE'ye gerçek dokunmatik ekran (kendi
+  hareketleriyle) ve basınç, eğim, havada imleç ve silgi ucuyla gerçek bir
+  kalem verir; çizim programları içindir. Tabletin fiziksel klavyesi bilgisayarın kendi diziliminle
   yazar; ⌨ düğmesi ekran klavyesini açar, onun metni de aynı dizilimle tuş
   tuş yazılır (xkbcommon). `krfb-virtualmonitor` VNC'den gelen girişi yok saydığı için
   uinput olmadan tablet yalnızca görüntü gösterir.

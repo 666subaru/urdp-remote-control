@@ -344,6 +344,12 @@ class _FakeInput:
     def pen_event(self, *a):
         self.calls.append(("pen", *a))
 
+    def touch_as_mouse(self, *a):
+        self.calls.append(("mouse-touch", *a))
+
+    def pen_as_mouse(self, *a):
+        self.calls.append(("mouse-pen", *a))
+
     def scroll(self, *a):
         self.calls.append(("scroll", *a))
 
@@ -358,6 +364,13 @@ class InputMessageTest(unittest.TestCase):
         screen = tablet.TabletScreen()
         fake = _FakeInput()
         screen._input = fake
+        screen.settings.input = "mouse"
+        screen.input_message(b'["t","d",3,0.25,0.75]')
+        screen.input_message(b'["p","h",0.5,0.5,0,0,0,1,0]')
+        self.assertEqual(fake.calls, [("mouse-touch", "down", 3, 0.25, 0.75),
+                                      ("mouse-pen", "hover", 0.5, 0.5, True)])
+        fake.calls.clear()
+        screen.settings.input = "tablet"
         screen.input_message(b'["t","d",3,0.25,0.75]')
         screen.input_message(b'["p","d",0.5,0.5,0.8,10,-5,1,0]')
         screen.input_message(b'["w",0,-200]')
@@ -414,6 +427,86 @@ class UinputTest(unittest.TestCase):
         self.assertIn((tip, 1), keys[1])
         self.assertIn((tip, 0), keys[2])
         self.assertEqual(keys[3], [(barrel, 0)])
+
+
+class MouseModeTest(unittest.TestCase):
+    def setUp(self):
+        from urdp import uinput
+        self.u = uinput
+        self.events = []
+        events = self.events
+
+        class Recorder:
+            def __init__(self):
+                self.frame = []
+
+            def emit(self, kind, code, value):
+                self.frame.append((kind, code, value))
+
+            def sync(self):
+                events.append(self.frame)
+                self.frame = []
+
+        dev = uinput.TabletInput.__new__(uinput.TabletInput)
+        dev.wheel = Recorder()
+        dev._area = (0.5, 0.0, 0.5, 1.0)        # right half of the desktop
+        dev._buttons = 0
+        dev._fingers = {}
+        dev._finger_pressed = dev._scrolling = dev._scrolled = False
+        dev._scroll_rest = [0.0, 0.0]
+        self.dev = dev
+
+    def buttons(self):
+        u = self.u
+        return [(c, v) for f in self.events for k, c, v in f
+                if k == u.EV_KEY]
+
+    def test_area_maps_to_the_desktop(self):
+        self.dev.pen_as_mouse("hover", 0.5, 0.5, False)
+        x = [v for k, c, v in self.events[0] if c == self.u.ABS_X][0]
+        self.assertEqual(x, round(0.75 * self.u.SPAN))
+
+    def test_pen_tip_left_and_barrel_right(self):
+        u = self.u
+        self.dev.pen_as_mouse("down", 0.1, 0.1, False)
+        self.dev.pen_as_mouse("up", 0.1, 0.1, False)
+        self.dev.pen_as_mouse("down", 0.1, 0.1, True)
+        self.dev.pen_as_mouse("up", 0.1, 0.1, False)
+        self.assertEqual(self.buttons(), [(u.BTN_LEFT, 1), (u.BTN_LEFT, 0),
+                                          (u.BTN_RIGHT, 1), (u.BTN_RIGHT, 0)])
+
+    def test_tap_clicks_and_drag_drags(self):
+        u = self.u
+        t = self.dev.touch_as_mouse
+        t("down", 1, 0.2, 0.2)
+        t("up", 1, 0.2, 0.2)
+        self.assertEqual(self.buttons(), [(u.BTN_LEFT, 1), (u.BTN_LEFT, 0)])
+        self.events.clear()
+        t("down", 1, 0.2, 0.2)
+        t("move", 1, 0.3, 0.3)
+        self.assertEqual(self.buttons(), [(u.BTN_LEFT, 1)])
+        t("up", 1, 0.3, 0.3)
+        self.assertEqual(self.buttons()[-1], (u.BTN_LEFT, 0))
+
+    def test_two_fingers_scroll_or_right_click(self):
+        u = self.u
+        t = self.dev.touch_as_mouse
+        t("down", 1, 0.5, 0.5)
+        t("down", 2, 0.6, 0.5)
+        t("move", 1, 0.5, 0.6)
+        t("move", 2, 0.6, 0.6)
+        t("up", 1, 0.5, 0.6)
+        t("up", 2, 0.6, 0.6)
+        wheel = [v for f in self.events for k, c, v in f
+                 if c == u.REL_WHEEL_HI_RES]
+        self.assertTrue(wheel and all(v > 0 for v in wheel))   # hand down
+        self.assertEqual(self.buttons(), [])                   # no clicks
+        self.events.clear()
+        t("down", 1, 0.5, 0.5)
+        t("down", 2, 0.6, 0.5)
+        t("up", 1, 0.5, 0.5)
+        t("up", 2, 0.6, 0.5)
+        self.assertEqual(self.buttons(), [(u.BTN_RIGHT, 1), (u.BTN_RIGHT, 0)])
 
 
 class KeyboardTest(unittest.TestCase):

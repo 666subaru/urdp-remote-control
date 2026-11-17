@@ -179,9 +179,13 @@ reachable from the network.
   the tablet re-sizes the screen.
 - **Position.** Right, left, above or below the existing screens.
 - **Touch and pen.** When `/dev/uinput` is writable (logind grants it to the
-  desktop user on most systems), URDP creates a virtual touchscreen and pen
-  and ties both to the tablet screen, so KDE gets real touch (scrolling,
-  press-and-hold) and a real pen with pressure, tilt, hover and eraser.
+  desktop user on most systems), URDP creates virtual input devices for the
+  tablet screen. **Input** chooses how they behave: *as a mouse* (default;
+  pen tip = left button, side button = right, hover moves the cursor; a
+  finger taps and drags, two fingers scroll or right-click) works in every
+  program, including Chrome, whose Wayland pen support is poor; *as touch
+  and pen* gives KDE a real touchscreen (its own gestures) and a real pen
+  with pressure, tilt, hover and eraser, for drawing programs.
   A physical keyboard on the tablet types with the computer's own layout;
   the ⌨ button opens the on-screen keyboard, whose text is typed key by
   key using that layout (xkbcommon).

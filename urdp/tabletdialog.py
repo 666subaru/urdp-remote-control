@@ -67,10 +67,14 @@ class TabletDialog(QDialog):
         for value, label in tablet.SIZES:
             self.size_box.addItem(_(label) if value in tablet.FOLLOW else label,
                               value)
+        self.input_box = QComboBox()
+        for value, label in tablet.INPUTS:
+            self.input_box.addItem(_(label), value)
         self.port_box = QSpinBox()
         self.port_box.setRange(1024, 65535)
         form.addRow(_("Position:"), self.position_box)
         form.addRow(_("Size:"), self.size_box)
+        form.addRow(_("Input:"), self.input_box)
         form.addRow(_("Port:"), self.port_box)
         layout.addLayout(form)
 
@@ -111,6 +115,7 @@ class TabletDialog(QDialog):
         self._load()
         self.position_box.currentIndexChanged.connect(self._save)
         self.size_box.currentIndexChanged.connect(self._save)
+        self.input_box.currentIndexChanged.connect(self._save)
         self.port_box.valueChanged.connect(self._save)
         self.btn_copy.clicked.connect(self._copy)
         self.btn_code.clicked.connect(self._new_code)
@@ -124,6 +129,7 @@ class TabletDialog(QDialog):
         s = self.screen_.settings
         self.position_box.setCurrentIndex(max(0, self.position_box.findData(s.position)))
         self.size_box.setCurrentIndex(max(0, self.size_box.findData(s.size)))
+        self.input_box.setCurrentIndex(max(0, self.input_box.findData(s.input)))
         self.port_box.setValue(s.port)
         self._show_address()
 
@@ -131,6 +137,7 @@ class TabletDialog(QDialog):
         s = self.screen_.settings
         s.position = self.position_box.currentData()
         s.size = self.size_box.currentData()
+        s.input = self.input_box.currentData()
         s.port = self.port_box.value()
         tablet.save_settings(s)
         self._show_address()

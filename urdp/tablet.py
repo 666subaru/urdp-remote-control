@@ -59,6 +59,9 @@ SIZES = [("sharp", "Match the tablet (sharp)"),
          ("light", "Match the tablet (lighter)"),
          ("2560x1600", "2560 × 1600"), ("1920x1200", "1920 × 1200"),
          ("1920x1080", "1920 × 1080"), ("1280x800", "1280 × 800")]
+#: How touch and pen reach the computer.
+INPUTS = [("mouse", "As a mouse (works in every program)"),
+          ("tablet", "As touch and pen (pressure, gestures)")]
 #: The sizes that follow the tablet (their labels are translated).
 FOLLOW = ("sharp", "light")
 
@@ -77,6 +80,8 @@ class Settings:
     port: int = DEFAULT_PORT
     position: str = "right"
     size: str = "sharp"
+    #: "mouse" (pen and touch act as a mouse) or "tablet" (real devices)
+    input: str = "mouse"
     code: str = ""
     #: The last tablet seen, in CSS pixels, so the next start can match it.
     tablet_width: int = 0
@@ -107,6 +112,8 @@ def load_settings() -> Settings:
         settings.position = "right"
     if settings.size not in dict(SIZES):
         settings.size = "sharp"
+    if settings.input not in dict(INPUTS):
+        settings.input = "mouse"
     if not 1024 <= settings.port <= 65535:
         settings.port = DEFAULT_PORT
     if len(settings.code) < 8 or set(settings.code) - set(_CODE_ALPHABET):
@@ -763,17 +770,22 @@ class TabletScreen(QObject):
                 device = self._input
                 if device is None:
                     return
+                mouse = self.settings.input == "mouse"
                 if kind == "t":
                     phase = {"d": "down", "m": "move", "u": "up"}[event[1]]
-                    device.touch_event(phase, int(event[2]), float(event[3]),
-                                       float(event[4]))
+                    touch = device.touch_as_mouse if mouse else device.touch_event
+                    touch(phase, int(event[2]), float(event[3]), float(event[4]))
                 elif kind == "p":
                     phase = {"h": "hover", "d": "down", "m": "move", "u": "up",
                              "o": "out"}[event[1]]
-                    device.pen_event(phase, float(event[2]), float(event[3]),
-                                     float(event[4]), float(event[5]),
-                                     float(event[6]), bool(event[7]),
-                                     bool(event[8]))
+                    if mouse:
+                        device.pen_as_mouse(phase, float(event[2]),
+                                            float(event[3]), bool(event[7]))
+                    else:
+                        device.pen_event(phase, float(event[2]),
+                                         float(event[3]), float(event[4]),
+                                         float(event[5]), float(event[6]),
+                                         bool(event[7]), bool(event[8]))
                 elif kind == "k":
                     device.key(int(event[1]), bool(event[2]))
                 elif kind == "x":
@@ -909,9 +921,17 @@ class TabletScreen(QObject):
         arguments += [f"output.{n}.position.{x},{y}"
                       for n, (x, y) in positions.items()]
         _kscreen_apply(arguments)
+        # Where the screen lies on the desktop, for the absolute mouse.
+        sizes = {o["name"]: _logical(o) for o in outputs
+                 if o.get("enabled", True) and o.get("connected", True)}
+        sizes[name] = (logical_w, logical_h)
+        right = max(positions.get(n, (0, 0))[0] + w for n, (w, _) in sizes.items())
+        bottom = max(positions.get(n, (0, 0))[1] + h for n, (_, h) in sizes.items())
+        vx, vy = positions[name]
         with self._input_lock:
             if self._input is not None:
                 self._input.map_to(name)
+                self._input.set_area(vx, vy, logical_w, logical_h, right, bottom)
         with self._lock:
             self._restarting = False
         self._set_state("connected" if self._client_address else "waiting",
