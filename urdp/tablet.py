@@ -752,6 +752,8 @@ class TabletScreen(QObject):
         ``["p", phase, x, y, pressure, tiltX, tiltY, barrel, rubber]``
                                      pen, phase h / d / m / u / o
         ``["w", dx, dy]``            wheel clicks
+        ``["k", code, down]``        a key of a physical keyboard (evdev code)
+        ``["x", text]``              text from the on-screen keyboard
         x and y run from 0 to 1 across the virtual screen.
         """
         try:
@@ -772,6 +774,10 @@ class TabletScreen(QObject):
                                      float(event[4]), float(event[5]),
                                      float(event[6]), bool(event[7]),
                                      bool(event[8]))
+                elif kind == "k":
+                    device.key(int(event[1]), bool(event[2]))
+                elif kind == "x":
+                    device.type_text(str(event[1]))
                 elif kind == "w":
                     device.scroll(max(-50.0, min(50.0, float(event[1]))),
                                   max(-50.0, min(50.0, float(event[2]))))

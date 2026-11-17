@@ -17,6 +17,7 @@ import fcntl
 import os
 import struct
 import subprocess
+import time
 from pathlib import Path
 
 EV_SYN, EV_KEY, EV_REL, EV_ABS = 0x00, 0x01, 0x02, 0x03
@@ -168,6 +169,10 @@ class TabletInput:
             f"{label} Wheel", keys=(BTN_LEFT, BTN_RIGHT, BTN_MIDDLE),
             rels=(REL_X, REL_Y, REL_WHEEL, REL_HWHEEL, REL_WHEEL_HI_RES,
                   REL_HWHEEL_HI_RES))
+        self.keyboard = Device(f"{label} Keyboard", keys=range(1, 249))
+        self._pressed: set[int] = set()
+        self._keymap: dict[str, tuple[int, tuple[int, ...]]] = {}
+        self._keymap_at = 0.0
         self._slots: dict[int, int] = {}       # pointer id -> slot
         self._tracking = 0
         self._pen_in = False
@@ -183,7 +188,7 @@ class TabletInput:
 
     def close(self) -> None:
         self.release_all()
-        for device in (self.touch, self.pen, self.wheel):
+        for device in (self.touch, self.pen, self.wheel, self.keyboard):
             device.close()
 
     # ------------------------------------------------------------- touch
@@ -274,7 +279,47 @@ class TabletInput:
         if dx or dy:
             dev.sync()
 
+    # ---------------------------------------------------------- keyboard
+    def key(self, code: int, down: bool) -> None:
+        """A physical key of the tablet's keyboard, as an evdev code; the
+        desktop's own layout decides what it types."""
+        if not 1 <= code <= 248 or (code in self._pressed) == down:
+            return
+        (self._pressed.add if down else self._pressed.discard)(code)
+        self.keyboard.emit(EV_KEY, code, 1 if down else 0)
+        self.keyboard.sync()
+
+    def _tap(self, code: int, mods: tuple[int, ...] = ()) -> None:
+        dev = self.keyboard
+        for mod in mods:
+            dev.emit(EV_KEY, mod, 1)
+            dev.sync()
+        dev.emit(EV_KEY, code, 1)
+        dev.sync()
+        dev.emit(EV_KEY, code, 0)
+        dev.sync()
+        for mod in reversed(mods):
+            dev.emit(EV_KEY, mod, 0)
+            dev.sync()
+
+    def type_text(self, text: str) -> None:
+        """Text from the on-screen keyboard, typed key by key with the
+        desktop's current layout.  Characters it cannot type are skipped."""
+        from . import keymap
+        if time.monotonic() - self._keymap_at > 5:       # layout may change
+            self._keymap = keymap.build(*keymap.kde_layout())
+            self._keymap_at = time.monotonic()
+        for char in text[:500]:
+            if char == "\n":
+                self._tap(keymap.KEY_ENTER)
+            elif char == "\t":
+                self._tap(keymap.KEY_TAB)
+            elif char in self._keymap:
+                self._tap(*self._keymap[char])
+
     def release_all(self) -> None:
+        for code in list(self._pressed):
+            self.key(code, False)
         for ident in list(self._slots):
             self.touch_event("up", ident, 0, 0)
         self.pen_event("out", 0, 0, 0, 0, 0, False, False)

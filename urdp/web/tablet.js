@@ -53,6 +53,7 @@ function updateChrome() {
   const live = !!(rfb && document.body.classList.contains('live'));
   $('full').hidden = isFull();
   $('fullmini').hidden = !live || isFull() || !document.fullscreenEnabled;
+  $('keys').hidden = !live || !direct();
 }
 
 function schedule(ms) {
@@ -141,7 +142,7 @@ async function connect() {
 function openInput() {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const sock = new WebSocket(`${scheme}://${location.host}/input?k=${encodeURIComponent(code)}`);
-  sock.addEventListener('open', () => { inputSock = sock; });
+  sock.addEventListener('open', () => { inputSock = sock; updateChrome(); });
   sock.addEventListener('close', () => { if (inputSock === sock) inputSock = null; });
   sock.addEventListener('error', () => sock.close());
 }
@@ -192,6 +193,89 @@ function directUp(ev) {
 function directLeave(ev) {
   if (direct() && ev.pointerType !== 'touch') post(penMessage(ev, 'o'));
 }
+
+// --------------------------------------------------------------- keyboard
+// A physical keyboard sends keys: its KeyboardEvent.code (the key's place,
+// not its letter) becomes the Linux key code, and the computer's own layout
+// decides the character, as with a keyboard plugged into it.
+const KEYS = {
+  Escape: 1, Digit1: 2, Digit2: 3, Digit3: 4, Digit4: 5, Digit5: 6, Digit6: 7,
+  Digit7: 8, Digit8: 9, Digit9: 10, Digit0: 11, Minus: 12, Equal: 13,
+  Backspace: 14, Tab: 15, KeyQ: 16, KeyW: 17, KeyE: 18, KeyR: 19, KeyT: 20,
+  KeyY: 21, KeyU: 22, KeyI: 23, KeyO: 24, KeyP: 25, BracketLeft: 26,
+  BracketRight: 27, Enter: 28, ControlLeft: 29, KeyA: 30, KeyS: 31, KeyD: 32,
+  KeyF: 33, KeyG: 34, KeyH: 35, KeyJ: 36, KeyK: 37, KeyL: 38, Semicolon: 39,
+  Quote: 40, Backquote: 41, ShiftLeft: 42, Backslash: 43, KeyZ: 44, KeyX: 45,
+  KeyC: 46, KeyV: 47, KeyB: 48, KeyN: 49, KeyM: 50, Comma: 51, Period: 52,
+  Slash: 53, ShiftRight: 54, NumpadMultiply: 55, AltLeft: 56, Space: 57,
+  CapsLock: 58, F1: 59, F2: 60, F3: 61, F4: 62, F5: 63, F6: 64, F7: 65, F8: 66,
+  F9: 67, F10: 68, NumLock: 69, ScrollLock: 70, Numpad7: 71, Numpad8: 72,
+  Numpad9: 73, NumpadSubtract: 74, Numpad4: 75, Numpad5: 76, Numpad6: 77,
+  NumpadAdd: 78, Numpad1: 79, Numpad2: 80, Numpad3: 81, Numpad0: 82,
+  NumpadDecimal: 83, IntlBackslash: 86, F11: 87, F12: 88, IntlRo: 89,
+  NumpadEnter: 96, ControlRight: 97, NumpadDivide: 98, PrintScreen: 99,
+  AltRight: 100, Home: 102, ArrowUp: 103, PageUp: 104, ArrowLeft: 105,
+  ArrowRight: 106, End: 107, ArrowDown: 108, PageDown: 109, Insert: 110,
+  Delete: 111, Pause: 119, MetaLeft: 125, MetaRight: 126, ContextMenu: 127,
+};
+
+function onKey(ev) {
+  if (!direct() || ev.isComposing || ev.keyCode === 229) return;
+  if (ev.target === $('code')) return;        // typing the access code
+  const code = KEYS[ev.code];
+  if (!code) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (ev.type === 'keydown' && ev.repeat) return;   // the computer repeats
+  post(['k', code, ev.type === 'keydown' ? 1 : 0]);
+}
+document.addEventListener('keydown', onKey, true);
+document.addEventListener('keyup', onKey, true);
+
+// The on-screen keyboard sends text, often rewriting a word it is composing.
+// What it typed is kept in a hidden field and every change is sent as
+// "delete n characters, type this", which also covers autocorrect.
+const typing = $('typing');
+const SENTINEL = '  ';                 // lets Backspace work on an empty field
+let typed = '';
+
+function resetTyping() {
+  typing.value = SENTINEL;
+  typed = '';
+  typing.setSelectionRange(SENTINEL.length, SENTINEL.length);
+}
+
+typing.addEventListener('input', () => {
+  if (!direct()) return;
+  const before = SENTINEL + typed;
+  const now = typing.value;
+  let same = 0;
+  while (same < before.length && same < now.length && before[same] === now[same]) same++;
+  for (let i = same; i < before.length; i++) post(['k', 14, 1]), post(['k', 14, 0]);
+  const added = now.slice(same);
+  if (added) post(['x', added]);
+  if (!now.startsWith(SENTINEL) || typed.length > 200 || added.includes('\n')) {
+    if (!typing.composing) resetTyping();
+    else typed = now.slice(SENTINEL.length);
+  } else {
+    typed = now.slice(SENTINEL.length);
+  }
+});
+typing.addEventListener('compositionstart', () => { typing.composing = true; });
+typing.addEventListener('compositionend', () => { typing.composing = false; });
+
+function toggleKeyboard() {
+  if (document.activeElement === typing) {
+    typing.blur();
+  } else {
+    resetTyping();
+    typing.focus({ preventScroll: true });
+  }
+}
+typing.addEventListener('focus', () => $('keys').classList.add('on'));
+typing.addEventListener('blur', () => $('keys').classList.remove('on'));
+$('keys').addEventListener('pointerdown', (ev) => ev.preventDefault());  // keep focus
+$('keys').addEventListener('click', toggleKeyboard);
 
 // ------------------------------------------------------------- vnc input
 // The fallback when the computer cannot create input devices.

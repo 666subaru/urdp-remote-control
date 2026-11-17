@@ -182,6 +182,9 @@ reachable from the network.
   desktop user on most systems), URDP creates a virtual touchscreen and pen
   and ties both to the tablet screen, so KDE gets real touch (scrolling,
   press-and-hold) and a real pen with pressure, tilt, hover and eraser.
+  A physical keyboard on the tablet types with the computer's own layout;
+  the ⌨ button opens the on-screen keyboard, whose text is typed key by
+  key using that layout (xkbcommon).
   `krfb-virtualmonitor` itself drops VNC input, so without uinput the tablet
   is view-only.
 - **Screen stays on.** The page plays a tiny silent video behind the picture,

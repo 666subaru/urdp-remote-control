@@ -416,6 +416,61 @@ class UinputTest(unittest.TestCase):
         self.assertEqual(keys[3], [(barrel, 0)])
 
 
+class KeyboardTest(unittest.TestCase):
+    def _recorder(self):
+        from urdp import uinput
+        sent = []
+
+        class Recorder:
+            def emit(self, kind, code, value):
+                if kind == uinput.EV_KEY:
+                    sent.append((code, value))
+
+            def sync(self):
+                pass
+
+        board = uinput.TabletInput.__new__(uinput.TabletInput)
+        board.keyboard = Recorder()
+        board._pressed = set()
+        return board, sent
+
+    def test_text_uses_the_layout_with_modifiers(self):
+        import time
+        board, sent = self._recorder()
+        board._keymap = {"a": (30, ()), "A": (30, (42,)), "@": (16, (100,))}
+        board._keymap_at = time.monotonic()
+        board.type_text("aA@\n€")
+        self.assertEqual(sent, [
+            (30, 1), (30, 0),
+            (42, 1), (30, 1), (30, 0), (42, 0),
+            (100, 1), (16, 1), (16, 0), (100, 0),
+            (28, 1), (28, 0)])              # Enter; € is not on this layout
+
+    def test_keys_are_not_pressed_twice_and_get_released(self):
+        board, sent = self._recorder()
+        board.key(29, True)
+        board.key(29, True)
+        board.key(999, True)
+        board._slots = {}
+        board.pen = type("P", (), {"emit": lambda *a: None,
+                                   "sync": lambda *a: None})()
+        board._pen_in = board._pen_down = board._barrel = False
+        board._rubber = False
+        board.release_all()
+        self.assertEqual(sent, [(29, 1), (29, 0)])
+
+    def test_turkish_layout_from_xkbcommon(self):
+        from urdp import keymap
+        table = keymap.build("tr")
+        if not table:
+            self.skipTest("libxkbcommon not available")
+        self.assertEqual(table["ı"], (23, ()))
+        self.assertEqual(table["İ"], (40, (42,)))
+        self.assertEqual(table["ş"], (39, ()))
+        self.assertEqual(table["/"], (8, (42,)))       # Shift+7, not keypad
+        self.assertEqual(table["@"], (16, (100,)))     # AltGr+Q
+
+
 class RouteTest(unittest.TestCase):
     def test_reports_a_vpn_that_took_the_lan(self):
         address = tablet.Address("wlan0", "192.168.1.20", 24)
