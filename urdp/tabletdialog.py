@@ -148,7 +148,7 @@ class TabletDialog(QDialog):
                              + self.screen_.settings.code)
         self.others.setText("  ".join(
             f"{a.address} ({a.interface})" for a in self.addresses[1:]))
-        self.others.setVisible(len(self.addresses) > 1)
+        self.others.setVisible(self.screen_.running and len(self.addresses) > 1)
         trouble = ""
         if self.addresses:
             via = tablet.misrouted(self.addresses[0], self.port_box.value())
@@ -180,6 +180,11 @@ class TabletDialog(QDialog):
         self.btn_start.setText(_("Stop") if running else _("Start"))
         for widget in (self.position_box, self.size_box, self.port_box):
             widget.setEnabled(not running)
+        # The code is only worth scanning while something answers it.
+        for widget in (self.code_image, self.address, self.btn_copy):
+            widget.setVisible(running)
+        self.others.setVisible(running and len(self.addresses) > 1)
+        self.adjustSize()
         texts = {"stopped": _("Stopped"),
                  "starting": _("Starting…"),
                  "waiting": _("Waiting for the tablet…"),
