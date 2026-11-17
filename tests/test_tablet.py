@@ -171,6 +171,9 @@ class _Owner:
         self.seen = []
         self.clients = []
         self.bad = 0
+        self.has_input = True
+        self.messages = []
+        self.inputs = []
 
     def check_code(self, given):
         if self.bad >= 3:
@@ -189,6 +192,15 @@ class _Owner:
 
     def bridge_closed(self, bridge):
         self.clients.append(None)
+
+    def input_opened(self, bridge):
+        self.inputs.append("open")
+
+    def input_closed(self, bridge):
+        self.inputs.append("closed")
+
+    def input_message(self, payload):
+        self.messages.append(payload)
 
 
 class ServerTest(unittest.TestCase):
@@ -226,6 +238,9 @@ class ServerTest(unittest.TestCase):
         self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
         status, _, body = self.get("/novnc/core/rfb.js")
         self.assertIn(b"export default class RFB", body)
+        status, headers, body = self.get("/keepawake.mp4")
+        self.assertEqual(headers["Content-Type"], "video/mp4")
+        self.assertEqual(body[4:8], b"ftyp")
 
     def test_no_files_outside_the_web_folder(self):
         for path in ("/../tablet.py", "/novnc/../../tablet.py",
@@ -252,10 +267,10 @@ class ServerTest(unittest.TestCase):
         _, _, body = self.get("/hello?k=goodcode00")
         self.assertEqual(json.loads(body)["reason"], "locked")
 
-    def _handshake(self, code):
+    def _handshake(self, code, path="/ws"):
         sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
         key = base64.b64encode(os.urandom(16)).decode()
-        sock.sendall((f"GET /ws?k={code} HTTP/1.1\r\nHost: x\r\n"
+        sock.sendall((f"GET {path}?k={code} HTTP/1.1\r\nHost: x\r\n"
                       "Upgrade: websocket\r\nConnection: Upgrade\r\n"
                       f"Sec-WebSocket-Key: {key}\r\n"
                       "Sec-WebSocket-Protocol: binary\r\n"
@@ -287,6 +302,112 @@ class ServerTest(unittest.TestCase):
         sock.sendall(bytes([0x88, 0x80]) + mask)      # close
         sock.close()
         self.assertEqual(self.owner.clients[0], "127.0.0.1")
+
+
+    def test_input_channel_delivers_messages(self):
+        sock, _, head = self._handshake("goodcode00", "/input")
+        self.assertIn(" 101 ", head.splitlines()[0])
+        mask = b"\x01\x02\x03\x04"
+        for text in (b'["t","d",1,0.5,0.5]', b'["p","h",0.1,0.2,0,0,0,0,0]'):
+            sock.sendall(bytes([0x81, 0x80 | len(text)]) + mask
+                         + tablet._unmask(text, mask))
+        sock.sendall(bytes([0x88, 0x80]) + mask)
+        sock.recv(16)
+        sock.close()
+        for _ in range(50):
+            if "closed" in self.owner.inputs:
+                break
+            threading.Event().wait(0.02)
+        self.assertEqual(self.owner.messages,
+                         [b'["t","d",1,0.5,0.5]', b'["p","h",0.1,0.2,0,0,0,0,0]'])
+        self.assertEqual(self.owner.inputs, ["open", "closed"])
+
+    def test_input_channel_needs_the_code(self):
+        sock, _, head = self._handshake("wrong", "/input")
+        sock.close()
+        self.assertIn(" 403 ", head.splitlines()[0])
+
+
+class _FakeInput:
+    def __init__(self):
+        self.calls = []
+
+    def touch_event(self, *a):
+        self.calls.append(("touch", *a))
+
+    def pen_event(self, *a):
+        self.calls.append(("pen", *a))
+
+    def scroll(self, *a):
+        self.calls.append(("scroll", *a))
+
+    def release_all(self):
+        self.calls.append(("release",))
+
+
+class InputMessageTest(unittest.TestCase):
+    def test_messages_reach_the_devices(self):
+        from PyQt6.QtCore import QCoreApplication
+        _app = QCoreApplication.instance() or QCoreApplication([])
+        screen = tablet.TabletScreen()
+        fake = _FakeInput()
+        screen._input = fake
+        screen.input_message(b'["t","d",3,0.25,0.75]')
+        screen.input_message(b'["p","d",0.5,0.5,0.8,10,-5,1,0]')
+        screen.input_message(b'["w",0,-200]')
+        screen.input_message(b'not json')
+        screen.input_message(b'["t","x",1,0,0]')
+        self.assertEqual(fake.calls, [
+            ("touch", "down", 3, 0.25, 0.75),
+            ("pen", "down", 0.5, 0.5, 0.8, 10.0, -5.0, True, False),
+            ("scroll", 0.0, -50.0)])
+        screen.input_closed(None)
+        self.assertEqual(fake.calls[-1], ("release",))
+
+
+class UinputTest(unittest.TestCase):
+    def _ioc(self, direction, number, size):
+        return (direction << 30) | (size << 16) | (ord("U") << 8) | number
+
+    def test_ioctl_numbers_match_the_kernel_structs(self):
+        from urdp import uinput
+        # struct uinput_setup: input_id (4 x u16) + name[80] + u32
+        self.assertEqual(uinput.UI_DEV_SETUP, self._ioc(1, 3, 8 + 80 + 4))
+        # struct uinput_abs_setup: u16 code, padding, input_absinfo (6 x s32)
+        self.assertEqual(uinput.UI_ABS_SETUP, self._ioc(1, 4, 4 + 24))
+        self.assertEqual(uinput.UI_SET_EVBIT, self._ioc(1, 100, 4))
+        self.assertEqual(uinput.UI_SET_PROPBIT, self._ioc(1, 110, 4))
+        self.assertEqual(uinput._ui_get_sysname(64), self._ioc(2, 44, 64))
+        self.assertEqual(struct.calcsize("<qqHHi"), 24)    # input_event
+
+    def test_pen_barrel_is_its_own_frame(self):
+        from urdp import uinput
+        frames = []
+
+        class Recorder:
+            def __init__(self):
+                self.events = []
+
+            def emit(self, kind, code, value):
+                self.events.append((kind, code, value))
+
+            def sync(self):
+                frames.append(self.events)
+                self.events = []
+
+        pen = uinput.TabletInput.__new__(uinput.TabletInput)
+        pen.pen = Recorder()
+        pen._pen_in = pen._pen_down = pen._rubber = pen._barrel = False
+        pen.pen_event("down", 0.5, 0.5, 0.7, 0, 0, True, False)
+        pen.pen_event("up", 0.5, 0.5, 0, 0, 0, False, False)
+        keys = [[(c, v) for k, c, v in f if k == uinput.EV_KEY] for f in frames]
+        barrel, tip = uinput.BARREL, uinput.BTN_TOUCH
+        # Frame 0 brings the pen in with the button held, before the tip.
+        self.assertIn((barrel, 1), keys[0])
+        self.assertNotIn((tip, 1), keys[0])
+        self.assertIn((tip, 1), keys[1])
+        self.assertIn((tip, 0), keys[2])
+        self.assertEqual(keys[3], [(barrel, 0)])
 
 
 class RouteTest(unittest.TestCase):

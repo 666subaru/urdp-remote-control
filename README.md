@@ -178,6 +178,14 @@ reachable from the network.
   1480 × 924 screen at 2×); "lighter" skips the scaling and sends a quarter of the pixels on such a tablet. Rotating
   the tablet re-sizes the screen.
 - **Position.** Right, left, above or below the existing screens.
+- **Touch and pen.** When `/dev/uinput` is writable (logind grants it to the
+  desktop user on most systems), URDP creates a virtual touchscreen and pen
+  and ties both to the tablet screen, so KDE gets real touch (scrolling,
+  press-and-hold) and a real pen with pressure, tilt, hover and eraser.
+  `krfb-virtualmonitor` itself drops VNC input, so without uinput the tablet
+  is view-only.
+- **Screen stays on.** The page plays a tiny silent video behind the picture,
+  which keeps Android from dimming the tablet (the Wake Lock API needs HTTPS).
 - **Access.** Everything but the noVNC files needs the code, which travels in
   the URL fragment (never sent to the server or in a Referer) and is then
   kept in the tablet browser. After 20 wrong codes access is blocked until

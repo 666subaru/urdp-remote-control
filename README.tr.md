@@ -175,6 +175,14 @@ gereken **tek bir port** vardır (varsayılan 1701).
   ekran olur); "daha hafif" ölçeklemeyi atlar, böyle bir tablette pikselin dörtte birini gönderir. Tableti
   döndürmek ekranı yeniden boyutlandırır.
 - **Konum.** Mevcut ekranların sağı, solu, üstü ya da altı.
+- **Dokunma ve kalem.** `/dev/uinput` yazılabiliyorsa (logind çoğu sistemde
+  masaüstü kullanıcısına verir) URDP sanal bir dokunmatik ekran ve kalem
+  oluşturup ikisini tablet ekranına bağlar; KDE gerçek dokunma (kaydırma,
+  basılı tutma) ve basınç, eğim, havada imleç ve silgi ucuyla gerçek bir
+  kalem görür. `krfb-virtualmonitor` VNC'den gelen girişi yok saydığı için
+  uinput olmadan tablet yalnızca görüntü gösterir.
+- **Ekran açık kalır.** Sayfa görüntünün arkasında küçük, sessiz bir video
+  oynatır; Android ekranı karartmaz (Wake Lock API HTTPS ister).
 - **Erişim.** noVNC dosyaları dışında her şey kod ister. Kod adresin `#`
   kısmında taşınır (sunucuya ve Referer'a gitmez), sonra tablet tarayıcısında
   saklanır. 20 yanlış koddan sonra paylaşım yeniden başlatılana kadar erişim

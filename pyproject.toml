@@ -26,6 +26,6 @@ packages = ["urdp"]
 
 [tool.setuptools.package-data]
 urdp = ["locale/*.json", "native/*.c", "web/*.html", "web/*.js",
-        "web/*.css", "web/novnc/*", "web/novnc/core/*.js",
+        "web/*.css", "web/*.mp4", "web/novnc/*", "web/novnc/core/*.js",
         "web/novnc/core/*/*.js", "web/novnc/vendor/pako/*",
         "web/novnc/vendor/pako/lib/*/*.js"]

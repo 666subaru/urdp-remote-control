@@ -40,6 +40,7 @@ from urllib.parse import parse_qs, urlsplit
 from PyQt6.QtCore import (QObject, QProcess, QProcessEnvironment, QTimer,
                           pyqtSignal)
 
+from . import uinput
 from .i18n import gettext as _
 from .store import config_dir
 
@@ -66,7 +67,8 @@ _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _MAX_FRAME = 16 * 1024 * 1024
 _STATIC_TYPES = {".html": "text/html; charset=utf-8",
                  ".js": "text/javascript; charset=utf-8",
-                 ".css": "text/css; charset=utf-8"}
+                 ".css": "text/css; charset=utf-8",
+                 ".mp4": "video/mp4"}
 
 
 # --------------------------------------------------------------- settings
@@ -345,10 +347,13 @@ def _frame(opcode: int, payload: bytes) -> bytes:
 
 
 class _Bridge:
-    """One tablet connection: WebSocket frames <-> the VNC byte stream."""
+    """One WebSocket connection.  With *vnc*, frames and the VNC byte stream
+    are bridged both ways; otherwise each message goes to *on_message*."""
 
-    def __init__(self, client: socket.socket, reader, vnc: socket.socket):
+    def __init__(self, client: socket.socket, reader,
+                 vnc: socket.socket | None = None, on_message=None):
         self.client, self.reader, self.vnc = client, reader, vnc
+        self.on_message = on_message
         self.lock = threading.Lock()
         self.closed = threading.Event()
 
@@ -361,6 +366,8 @@ class _Bridge:
             return
         self.closed.set()
         for sock in (self.client, self.vnc):
+            if sock is None:
+                continue
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
@@ -384,7 +391,8 @@ class _Bridge:
         self.close()
 
     def run(self) -> None:
-        threading.Thread(target=self._vnc_to_client, daemon=True).start()
+        if self.vnc is not None:
+            threading.Thread(target=self._vnc_to_client, daemon=True).start()
         try:
             while not self.closed.is_set():
                 first, second = self._read(2)
@@ -400,7 +408,10 @@ class _Bridge:
                 key = self._read(4)
                 payload = _unmask(self._read(length), key)
                 if opcode in (0x0, 0x1, 0x2):
-                    self.vnc.sendall(payload)
+                    if self.vnc is not None:
+                        self.vnc.sendall(payload)
+                    elif self.on_message is not None:
+                        self.on_message(payload)
                 elif opcode == 0x8:
                     try:
                         self.send(0x8, payload[:2])
@@ -455,6 +466,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._hello(query)
         elif path == "/ws":
             self._websocket(query)
+        elif path == "/input":
+            self._input(query)
         else:
             self._static(path)
 
@@ -493,26 +506,21 @@ class _Handler(BaseHTTPRequestHandler):
         if not (200 <= w <= 8192 and 200 <= h <= 8192 and 0.5 <= ratio <= 5):
             w = h = ratio = 0.0
         restart = owner.tablet_seen(w, h, ratio)
-        answer.update(ok=True, password=owner.vnc_password, restart=restart)
+        answer.update(ok=True, password=owner.vnc_password, restart=restart,
+                      input=owner.has_input)
         self._json(answer)
 
-    def _websocket(self, query: dict) -> None:
-        owner = self.server.owner
+    def _may_upgrade(self, query: dict) -> bool:
         if (self.headers.get("Upgrade", "").lower() != "websocket"
                 or not self.headers.get("Sec-WebSocket-Key")):
             self._send(400, b"websocket expected", "text/plain")
-            return
+            return False
         if not self._code_ok(query):
             self._send(403, b"forbidden", "text/plain")
-            return
-        try:
-            vnc = socket.create_connection(("127.0.0.1", owner.vnc_port),
-                                           timeout=3)
-        except OSError:
-            self._send(503, b"screen not ready", "text/plain")
-            return
-        vnc.settimeout(None)
-        vnc.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            return False
+        return True
+
+    def _upgrade(self) -> None:
         self.send_response(101)
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")
@@ -527,6 +535,36 @@ class _Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self.connection.settimeout(None)
         self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    def _input(self, query: dict) -> None:
+        owner = self.server.owner
+        if not self._may_upgrade(query):
+            return
+        if not owner.has_input:
+            self._send(503, b"no input devices", "text/plain")
+            return
+        self._upgrade()
+        bridge = _Bridge(self.connection, self.rfile,
+                         on_message=owner.input_message)
+        owner.input_opened(bridge)
+        try:
+            bridge.run()
+        finally:
+            owner.input_closed(bridge)
+
+    def _websocket(self, query: dict) -> None:
+        owner = self.server.owner
+        if not self._may_upgrade(query):
+            return
+        try:
+            vnc = socket.create_connection(("127.0.0.1", owner.vnc_port),
+                                           timeout=3)
+        except OSError:
+            self._send(503, b"screen not ready", "text/plain")
+            return
+        vnc.settimeout(None)
+        vnc.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self._upgrade()
         bridge = _Bridge(self.connection, self.rfile, vnc)
         owner.bridge_opened(bridge, self.client_address[0])
         try:
@@ -579,6 +617,9 @@ class TabletScreen(QObject):
         self._client_address = ""
         self._bad_codes = 0
         self._restarting = False
+        self._input: uinput.TabletInput | None = None
+        self._input_bridge: _Bridge | None = None
+        self._input_lock = threading.Lock()
         self._layout_tries = 0
         self._layout_timer = QTimer(self)
         self._layout_timer.setInterval(250)
@@ -618,6 +659,7 @@ class TabletScreen(QObject):
             return
         threading.Thread(target=self._server.serve_forever,
                          daemon=True).start()
+        self._open_input()
         self._set_state("starting")
         s = self.settings
         self._start_monitor(geometry(s.size, s.tablet_width, s.tablet_height,
@@ -632,6 +674,7 @@ class TabletScreen(QObject):
             bridges, self._bridges = self._bridges, []
         for bridge in bridges:
             bridge.close()
+        self._close_input()
         self._stop_monitor()
         self._client_address = ""
         self._set_state("stopped")
@@ -641,8 +684,82 @@ class TabletScreen(QObject):
         save_settings(self.settings)
         with self._lock:
             bridges, self._bridges = self._bridges, []
+            if self._input_bridge is not None:
+                bridges.append(self._input_bridge)
         for bridge in bridges:
             bridge.close()
+
+    # ------------------------------------------------------------- input
+    @property
+    def has_input(self) -> bool:
+        return self._input is not None
+
+    def _open_input(self) -> None:
+        """Touch and pen become real devices when /dev/uinput is writable;
+        without it the page falls back to sending input through VNC."""
+        if self._input is not None or not uinput.available():
+            return
+        try:
+            self._input = uinput.TabletInput()
+        except OSError:
+            self._input = None
+
+    def _close_input(self) -> None:
+        with self._lock:
+            bridge, self._input_bridge = self._input_bridge, None
+        if bridge is not None:
+            bridge.close()
+        with self._input_lock:
+            device, self._input = self._input, None
+        if device is not None:
+            device.close()
+
+    def input_opened(self, bridge: _Bridge) -> None:
+        with self._lock:
+            old, self._input_bridge = self._input_bridge, bridge
+        if old is not None:
+            old.close()
+
+    def input_closed(self, bridge: _Bridge) -> None:
+        with self._lock:
+            if self._input_bridge is bridge:
+                self._input_bridge = None
+        with self._input_lock:
+            if self._input is not None:
+                self._input.release_all()   # nothing stays pressed
+
+    def input_message(self, payload: bytes) -> None:
+        """One input event from the page, a JSON array:
+
+        ``["t", phase, id, x, y]``  touch, phase d / m / u
+        ``["p", phase, x, y, pressure, tiltX, tiltY, barrel, rubber]``
+                                     pen, phase h / d / m / u / o
+        ``["w", dx, dy]``            wheel clicks
+        x and y run from 0 to 1 across the virtual screen.
+        """
+        try:
+            event = json.loads(payload)
+            kind = event[0]
+            with self._input_lock:
+                device = self._input
+                if device is None:
+                    return
+                if kind == "t":
+                    phase = {"d": "down", "m": "move", "u": "up"}[event[1]]
+                    device.touch_event(phase, int(event[2]), float(event[3]),
+                                       float(event[4]))
+                elif kind == "p":
+                    phase = {"h": "hover", "d": "down", "m": "move", "u": "up",
+                             "o": "out"}[event[1]]
+                    device.pen_event(phase, float(event[2]), float(event[3]),
+                                     float(event[4]), float(event[5]),
+                                     float(event[6]), bool(event[7]),
+                                     bool(event[8]))
+                elif kind == "w":
+                    device.scroll(max(-50.0, min(50.0, float(event[1]))),
+                                  max(-50.0, min(50.0, float(event[2]))))
+        except (ValueError, TypeError, IndexError, KeyError, OSError):
+            pass
 
     # ------------------------------------------- called from web threads
     def check_code(self, given: str) -> bool | None:
@@ -769,6 +886,9 @@ class TabletScreen(QObject):
         arguments += [f"output.{n}.position.{x},{y}"
                       for n, (x, y) in positions.items()]
         _kscreen_apply(arguments)
+        with self._input_lock:
+            if self._input is not None:
+                self._input.map_to(name)
         with self._lock:
             self._restarting = False
         self._set_state("connected" if self._client_address else "waiting",
