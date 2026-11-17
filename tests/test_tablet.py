@@ -60,7 +60,7 @@ class LayoutTest(unittest.TestCase):
 
     def test_right(self):
         self.assertEqual(tablet.layout(self.outputs, "V", 1480, 924, "right"),
-                         {"V": (1920, 0)})
+                         {"V": (1920, 0), "eDP-1": (0, 0)})
 
     def test_left_moves_the_others(self):
         self.assertEqual(tablet.layout(self.outputs, "V", 1480, 924, "left"),
@@ -70,7 +70,7 @@ class LayoutTest(unittest.TestCase):
         self.assertEqual(tablet.layout(self.outputs, "V", 1480, 924, "above"),
                          {"V": (0, 0), "eDP-1": (0, 924)})
         self.assertEqual(tablet.layout(self.outputs, "V", 1480, 924, "below"),
-                         {"V": (0, 1080)})
+                         {"V": (0, 1080), "eDP-1": (0, 0)})
 
     def test_scaled_and_rotated_screens_use_logical_size(self):
         outputs = [_output("A", 0, 0, 3840, 2160, scale=2),
@@ -78,7 +78,13 @@ class LayoutTest(unittest.TestCase):
                    _output("V", 0, 0, 100, 100)]
         # A is 1920 wide logically, B is 1080 wide after rotation.
         self.assertEqual(tablet.layout(outputs, "V", 100, 100, "right"),
-                         {"V": (3000, 0)})
+                         {"V": (3000, 0), "A": (0, 0), "B": (1920, 0)})
+
+    def test_a_gap_left_by_kwin_is_closed(self):
+        outputs = [_output("eDP-1", 2560, 0, 1920, 1080),
+                   _output("V", 4480, 0, 1692, 1056)]
+        self.assertEqual(tablet.layout(outputs, "V", 1692, 1056, "right"),
+                         {"V": (1920, 0), "eDP-1": (0, 0)})
 
 
 class SettingsTest(unittest.TestCase):

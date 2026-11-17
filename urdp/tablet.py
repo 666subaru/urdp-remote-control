@@ -162,7 +162,8 @@ def layout(outputs: list[dict], name: str, width: int, height: int,
     """New positions that put *name* (logical *width* x *height*) on *side*.
 
     KWin refuses negative coordinates, so for left/above the other screens
-    move over instead.  Returns only the positions to set.
+    move over instead.  Returns the position of every screen, the layout
+    starting at 0,0.
     """
     others = {o["name"]: (o["pos"]["x"], o["pos"]["y"], *_logical(o))
               for o in outputs
@@ -184,9 +185,13 @@ def layout(outputs: list[dict], name: str, width: int, height: int,
     else:
         place = (right, top)
     moved = {n: (x + shift[0], y + shift[1])
-             for n, (x, y, _, _) in others.items() if shift != (0, 0)}
+             for n, (x, y, _, _) in others.items()}
     moved[name] = place
-    return moved
+    # Start the whole layout at 0,0: KWin restores the positions it saved
+    # for this set of screens, which can leave a gap from an earlier layout.
+    low_x = min(x for x, _ in moved.values())
+    low_y = min(y for _, y in moved.values())
+    return {n: (x - low_x, y - low_y) for n, (x, y) in moved.items()}
 
 
 def _wayland_env() -> dict[str, str]:
@@ -307,6 +312,18 @@ def supported() -> str:
         return _("krfb is not installed. Install the krfb package to use "
                  "this feature.")
     return ""
+
+
+def page_version() -> str:
+    """Changes whenever the page's own files change, so an open page that
+    reconnects to a newer URDP reloads itself instead of running old code."""
+    digest = hashlib.sha256()
+    for name in ("tablet.html", "tablet.js", "tablet.css"):
+        try:
+            digest.update((WEB_ROOT / name).read_bytes())
+        except OSError:
+            pass
+    return digest.hexdigest()[:12]
 
 
 def page_strings() -> dict[str, str]:
@@ -489,7 +506,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _hello(self, query: dict) -> None:
         owner = self.server.owner
-        answer: dict = {"strings": page_strings()}
+        answer: dict = {"strings": page_strings(), "version": page_version()}
         ok = self._code_ok(query)
         if not ok:
             answer.update(ok=False, reason="locked" if ok is None else "code")

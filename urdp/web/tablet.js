@@ -21,6 +21,7 @@ let rfb = null;
 let failures = 0;
 let timer = 0;
 let shownSize = '';
+let pageVersion = '';            // the page files this page was loaded from
 let inputSock = null;            // direct touch / pen channel, when offered
 
 // The code arrives in the fragment of the address the QR code holds.  Keep it
@@ -86,6 +87,11 @@ async function connect() {
     return;
   }
   strings = answer.strings || strings;
+  // URDP was updated while this page stayed open: load the new page.
+  if (answer.version) {
+    if (pageVersion && answer.version !== pageVersion) { location.reload(); return; }
+    pageVersion = answer.version;
+  }
   applyStrings();
   if (!answer.ok) {
     askCode(!!code);
