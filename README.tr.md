@@ -33,6 +33,7 @@ arayüzdür.** FreeRDP kurulu değilse hiçbir şey yapamaz, o yüzden ilk şart
 | `libsecret` (`secret-tool`) | Parolayı KDE Cüzdan / GNOME Keyring'de saklamak | Hayır, ama parola kaydetme onsuz çalışmaz |
 | `krfb` (`krfb-virtualmonitor`) | Tablet ekranı (yalnız KDE Plasma Wayland) | Hayır |
 | `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | Tablet ekranı sesi | Hayır |
+| GStreamer (`gst-launch-1.0`, PipeWire eklentisi; VA-API eklentileri isteğe bağlı) | Tablet ekranı hızlı görüntü | Hayır |
 
 FreeRDP **3** gerekiyor. FreeRDP 2 birçok seçeneği farklı yazar
 (`/cert-tofu`, `/monitor-list` gibi); uygulama eski bir sürüm bulursa durum
@@ -188,6 +189,15 @@ gereken **tek bir port** vardır (varsayılan 1701).
   yazar; ⌨ düğmesi ekran klavyesini açar, onun metni de aynı dizilimle tuş
   tuş yazılır (xkbcommon). `krfb-virtualmonitor` VNC'den gelen girişi yok saydığı için
   uinput olmadan tablet yalnızca görüntü gösterir.
+- **Görüntü.** *Hızlı* (varsayılan), sanal ekranı masaüstünün ekran
+  paylaşım portalı üzerinden kaydeder: KDE bir kez hangi ekranın
+  paylaşılacağını sorar (**URDP-Tablet**'i seçin; cevabı hatırlar),
+  GStreamer de her kareyi JPEG'e çevirir, mümkünse VA-API ile ekran kartında.
+  Tablet saniyede 60 kareye kadar, bir değişiklikten yaklaşık 20 ms sonra
+  görüntü alır; yavaş ağda daha az kare alır, eski kare almaz. *Uyumlu*,
+  krfb'nin kendi VNC akışını kullanır; o saniyede en fazla 10 kare ve
+  saniyenin onda biri geriden gönderir. GStreamer yoksa ya da paylaşım
+  reddedilirse sayfa onu kullanır.
 - **Ses.** **Ses: Tablette** seçiliyken URDP bir "URDP Tablet" hoparlörü
   ekler (`pactl` ve `parec` ile PipeWire/PulseAudio boş çıkışı) ve paylaşım
   sürdükçe onu varsayılan çıkış yapar; tablet gelen sesi çalar (48 kHz
@@ -319,7 +329,7 @@ Kod düzeni:
 | `theme.py` / `widgets.py` | Karanlık tema ve ortak parçalar |
 | `tab_*.py` | Beş sekme |
 | `mainwindow.py` | Pencere, profil yönetimi, bağlanma akışı |
-| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `web/` | Tablet ekranı: sanal ekran, web sunucusu, ses, sayfa |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `web/` | Tablet ekranı: sanal ekran, web sunucusu, ses, hızlı görüntü, sayfa |
 | `qr.py` | Tablet adresi için küçük QR üreticisi |
 
 ## Lisans

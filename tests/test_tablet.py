@@ -180,6 +180,9 @@ class _Owner:
     audio_opened = tablet.TabletScreen.audio_opened
     audio_closed = tablet.TabletScreen.audio_closed
     _audio_out = tablet.TabletScreen._audio_out
+    video_opened = tablet.TabletScreen.video_opened
+    video_closed = tablet.TabletScreen.video_closed
+    _video_out = tablet.TabletScreen._video_out
 
     def __init__(self, vnc_port):
         self.vnc_port = vnc_port
@@ -198,6 +201,9 @@ class _Owner:
         self.has_input = True
         self.has_audio = True
         self._audio = None
+        self.has_video = True
+        self._video = None
+        self._last_frame = b""
         self.messages = []
         self.inputs = []
 
@@ -442,6 +448,32 @@ class ServerTest(unittest.TestCase):
         self.assertIsNone(self.owner._audio)
         self.owner._audio_out(piece)                    # nobody listening
 
+    def _frame(self, sock):
+        first, length = sock.recv(2)
+        if length == 126:
+            length = struct.unpack("!H", sock.recv(2))[0]
+        data = b""
+        while len(data) < length:
+            data += sock.recv(length - len(data))
+        return first, data
+
+    def test_video_sends_the_newest_frame(self):
+        self.owner._video_out(b"old frame")
+        sock, _, head = self._handshake(self._ticket(), "/video")
+        self.assertIn(" 101 ", head.splitlines()[0])
+        self.assertEqual(self._frame(sock), (0x82, b"old frame"))  # at once
+        self.owner._video_out(b"new frame")
+        self.assertEqual(self._frame(sock), (0x82, b"new frame"))
+        self.assertEqual(self.owner.clients[0], "127.0.0.1")       # status
+        sock.sendall(bytes([0x88, 0x80]) + b"\0\0\0\0")
+        sock.close()
+
+    def test_video_needs_the_fast_picture(self):
+        self.owner.has_video = False
+        sock, _, head = self._handshake(self._ticket(), "/video")
+        sock.close()
+        self.assertIn(" 503 ", head.splitlines()[0])
+
     def test_audio_needs_a_ticket_and_sound(self):
         sock, _, head = self._handshake("wrong", "/audio")
         sock.close()
@@ -455,6 +487,45 @@ class ServerTest(unittest.TestCase):
         sock, _, head = self._handshake("wrong", "/input")
         sock.close()
         self.assertIn(" 403 ", head.splitlines()[0])
+
+
+class VideoTest(unittest.TestCase):
+    def test_frames_are_split_however_they_arrive(self):
+        from urdp import tabletvideo
+
+        def part(data):
+            return (b"--urdpframe\r\nContent-Type: image/jpeg\r\n"
+                    b"Content-Length: %d\r\n\r\n" % len(data) + data + b"\r\n")
+
+        stream = part(b"\xff\xd8one") + part(b"\xff\xd8two\r\n\r\nxx")
+        for step in (1, 7, len(stream)):
+            reader = tabletvideo.FrameReader()
+            got = []
+            for i in range(0, len(stream), step):
+                got += reader.feed(stream[i:i + step])
+            self.assertEqual(got, [b"\xff\xd8one", b"\xff\xd8two\r\n\r\nxx"])
+
+    def test_newest_frame_only(self):
+        latest = tablet._Latest(b"a")
+        latest.put(b"b")
+        latest.put(b"c")
+        self.assertEqual(latest.take(0), b"c")
+        self.assertEqual(latest.take(0.01), b"")
+
+    def test_gpu_pipeline_comes_first(self):
+        from urdp import tabletvideo
+        with unittest.mock.patch.object(tabletvideo, "_has_element",
+                                        return_value=True):
+            tries = tabletvideo.pipelines(7, 42)
+        self.assertEqual(len(tries), 2)
+        self.assertIn("vajpegenc", tries[0])
+        self.assertIn("jpegenc", tries[1])
+        for t in tries:
+            self.assertEqual(t[:3], ["pipewiresrc", "fd=7", "path=42"])
+            self.assertEqual(t[-3:], ["fdsink", "fd=1", "sync=false"])
+        with unittest.mock.patch.object(tabletvideo, "_has_element",
+                                        side_effect=lambda e: e != "vajpegenc"):
+            self.assertEqual(len(tabletvideo.pipelines(7, 42)), 1)
 
 
 class SpeakerTest(unittest.TestCase):

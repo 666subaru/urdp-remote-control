@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout,
                              QLabel, QPushButton, QSpinBox, QVBoxLayout,
                              QWidget)
 
-from . import qr, tablet, tabletaudio
+from . import qr, tablet, tabletaudio, tabletvideo
 from .i18n import _
 from .widgets import body, hint
 
@@ -70,6 +70,9 @@ class TabletDialog(QDialog):
         self.input_box = QComboBox()
         for value, label in tablet.INPUTS:
             self.input_box.addItem(_(label), value)
+        self.picture_box = QComboBox()
+        for value, label in tablet.PICTURES:
+            self.picture_box.addItem(_(label), value)
         self.sound_box = QComboBox()
         for value, label in tablet.SOUNDS:
             self.sound_box.addItem(_(label), value)
@@ -78,6 +81,8 @@ class TabletDialog(QDialog):
         form.addRow(_("Position:"), self.position_box)
         form.addRow(_("Size:"), self.size_box)
         form.addRow(_("Input:"), self.input_box)
+        if tabletvideo.available():
+            form.addRow(_("Picture:"), self.picture_box)
         if tabletaudio.available():
             form.addRow(_("Sound:"), self.sound_box)
         form.addRow(_("Port:"), self.port_box)
@@ -104,6 +109,9 @@ class TabletDialog(QDialog):
         layout.addWidget(self.status)
         self.warning = hint("")
         layout.addWidget(self.warning)
+        self.picture_note = hint("")
+        self.picture_note.setVisible(False)
+        layout.addWidget(self.picture_note)
         layout.addWidget(hint(_("Sharing continues while URDP is open.")))
 
         buttons = QHBoxLayout()
@@ -121,6 +129,7 @@ class TabletDialog(QDialog):
         self.position_box.currentIndexChanged.connect(self._save)
         self.size_box.currentIndexChanged.connect(self._save)
         self.input_box.currentIndexChanged.connect(self._save)
+        self.picture_box.currentIndexChanged.connect(self._save)
         self.sound_box.currentIndexChanged.connect(
             lambda: self.screen_.set_sound(self.sound_box.currentData()))
         self.port_box.valueChanged.connect(self._save)
@@ -128,6 +137,7 @@ class TabletDialog(QDialog):
         self.btn_code.clicked.connect(self._new_code)
         self.btn_start.clicked.connect(self._toggle)
         self.screen_.state_changed.connect(self._show_state)
+        self.screen_.notice.connect(self._show_notice)
         self._show_state(self.screen_.state, self.screen_.detail)
         self.setMinimumWidth(440)
 
@@ -138,6 +148,8 @@ class TabletDialog(QDialog):
         self.size_box.setCurrentIndex(max(0, self.size_box.findData(s.size)))
         self.input_box.setCurrentIndex(max(0, self.input_box.findData(s.input)))
         self.sound_box.setCurrentIndex(max(0, self.sound_box.findData(s.sound)))
+        self.picture_box.setCurrentIndex(
+            max(0, self.picture_box.findData(s.picture)))
         self.port_box.setValue(s.port)
         self._show_address()
 
@@ -146,6 +158,7 @@ class TabletDialog(QDialog):
         s.position = self.position_box.currentData()
         s.size = self.size_box.currentData()
         s.input = self.input_box.currentData()
+        s.picture = self.picture_box.currentData()
         s.port = self.port_box.value()
         tablet.save_settings(s)
         self._show_address()
@@ -190,10 +203,16 @@ class TabletDialog(QDialog):
             self._save()
             self.screen_.start()
 
+    def _show_notice(self, text: str) -> None:
+        self.picture_note.setText(text)
+        self.picture_note.setVisible(bool(text))
+        self.adjustSize()
+
     def _show_state(self, state: str, detail: str) -> None:
         running = self.screen_.running
         self.btn_start.setText(_("Stop") if running else _("Start"))
-        for widget in (self.position_box, self.size_box, self.port_box):
+        for widget in (self.position_box, self.size_box, self.picture_box,
+                       self.port_box):
             widget.setEnabled(not running)
         # The code is only worth scanning while something answers it.
         for widget in (self.code_image, self.address, self.btn_copy):

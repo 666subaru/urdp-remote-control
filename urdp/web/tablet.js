@@ -4,6 +4,7 @@ import RFB from './novnc/core/rfb.js';
 import { encodings } from './novnc/core/encodings.js';
 import { clientToElement } from './novnc/core/util/element.js';
 import { hex, hmac, pbkdf2, unseal } from './auth.js';
+import FastView from './fastview.js';
 
 // Ask the server to draw the cursor into the picture.  With the cursor
 // pseudo-encodings noVNC draws it itself, but only where the tablet is being
@@ -24,6 +25,7 @@ let timer = 0;
 let shownSize = '';
 let pageVersion = '';            // the page files this page was loaded from
 let inputSock = null;            // direct touch / pen channel, when offered
+let fastFailures = 0;            // fast pictures in a row that never showed
 let derived = { from: '', key: null };   // the key the code makes, kept
 
 function keyFor(salt, rounds) {
@@ -125,12 +127,17 @@ async function connect() {
 
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const ticket = encodeURIComponent(answer.ticket);
-  const url = `${scheme}://${location.host}/ws?t=${ticket}`;
-  rfb = new RFB($('screen'), url, {
-    credentials: { password: unseal(key, challenge.nonce, answer.password) },
-    shared: true,
-    wsProtocols: ['binary'],
-  });
+  if (answer.video && fastFailures < 2) {
+    // The computer records the screen itself: up to 60 frames a second.
+    rfb = new FastView($('screen'), `${scheme}://${location.host}/video?t=${ticket}`);
+  } else {
+    const url = `${scheme}://${location.host}/ws?t=${ticket}`;
+    rfb = new RFB($('screen'), url, {
+      credentials: { password: unseal(key, challenge.nonce, answer.password) },
+      shared: true,
+      wsProtocols: ['binary'],
+    });
+  }
   rfb.scaleViewport = true;
   rfb.resizeSession = false;
   rfb.qualityLevel = 8;
@@ -144,7 +151,9 @@ async function connect() {
     status(text('connected', 'Connected'));
     updateChrome();
   });
+  const shown = rfb;
   rfb.addEventListener('disconnect', () => {
+    if (shown instanceof FastView) fastFailures = shown.everConnected ? 0 : fastFailures + 1;
     rfb = null;
     if (inputSock) inputSock.close();
     if (audioSock) audioSock.close();

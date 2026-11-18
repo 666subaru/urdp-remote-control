@@ -52,7 +52,7 @@ from urllib.parse import parse_qs, urlsplit
 from PyQt6.QtCore import (QObject, QProcess, QProcessEnvironment, QTimer,
                           pyqtSignal)
 
-from . import tabletaudio, uinput
+from . import tabletaudio, tabletvideo, uinput
 from .i18n import gettext as _
 from .store import config_dir
 
@@ -83,6 +83,9 @@ INPUTS = [("mouse", "As a mouse (works in every program)"),
           ("tablet", "As touch and pen (pressure, gestures)")]
 #: Where the computer's sound plays while sharing runs.
 SOUNDS = [("computer", "On the computer"), ("tablet", "On the tablet")]
+#: How the picture reaches the tablet.
+PICTURES = [("fast", "Fast (asks once for permission to record the screen)"),
+            ("vnc", "Compatible (slower)")]
 #: The sizes that follow the tablet (their labels are translated).
 FOLLOW = ("sharp", "light")
 
@@ -105,6 +108,10 @@ class Settings:
     input: str = "mouse"
     #: "computer" or "tablet" (see SOUNDS)
     sound: str = "computer"
+    #: "fast" (the screen through the ScreenCast portal) or "vnc"
+    picture: str = "fast"
+    #: The ScreenCast portal's restore token, so it asks only once.
+    video_token: str = ""
     code: str = ""
     #: The last tablet seen, in CSS pixels, so the next start can match it.
     tablet_width: int = 0
@@ -139,6 +146,8 @@ def load_settings() -> Settings:
         settings.input = "mouse"
     if settings.sound not in dict(SOUNDS):
         settings.sound = "computer"
+    if settings.picture not in dict(PICTURES):
+        settings.picture = "fast"
     if not 1024 <= settings.port <= 65535:
         settings.port = DEFAULT_PORT
     if not (200 <= settings.tablet_width <= 8192
@@ -376,7 +385,8 @@ def supported() -> str:
 
 def _read_page() -> dict[str, bytes]:
     page = {}
-    for name in ("tablet.html", "tablet.js", "tablet.css", "auth.js"):
+    for name in ("tablet.html", "tablet.js", "tablet.css", "auth.js",
+                 "fastview.js"):
         try:
             page["/" + name] = (WEB_ROOT / name).read_bytes()
         except OSError:
@@ -571,6 +581,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._input(query)
         elif path == "/audio":
             self._audio(query)
+        elif path == "/video":
+            self._video(query)
         else:
             self._static(path)
 
@@ -627,7 +639,7 @@ class _Handler(BaseHTTPRequestHandler):
             w = h = ratio = 0.0
         restart = owner.tablet_seen(w, h, ratio)
         answer.update(ok=True, restart=restart, input=owner.has_input,
-                      audio=owner.has_audio,
+                      audio=owner.has_audio, video=owner.has_video,
                       ticket=owner.new_ticket(self.client_address[0]),
                       password=seal(owner.key(), nonce, owner.vnc_password))
         self._json(answer)
@@ -675,6 +687,32 @@ class _Handler(BaseHTTPRequestHandler):
             bridge.run()
         finally:
             owner.input_closed(bridge)
+
+    def _video(self, query: dict) -> None:
+        """The screen as JPEGs, one binary message each, newest only: a
+        tablet that cannot keep up gets fewer frames, not older ones."""
+        owner = self.server.owner
+        if not self._may_upgrade(query, "video"):
+            return
+        if not owner.has_video:
+            self._send(503, b"no fast picture", "text/plain")
+            return
+        self._upgrade()
+        bridge = _Bridge(self.connection, self.rfile)
+        frames = owner.video_opened(bridge)
+        owner.bridge_opened(bridge, self.client_address[0])
+        threading.Thread(target=bridge.run, daemon=True).start()
+        try:
+            while not bridge.closed.is_set():
+                frame = frames.take(0.5)
+                if frame:
+                    bridge.send(0x2, frame)
+        except OSError:
+            pass
+        finally:
+            bridge.close()
+            owner.video_closed(bridge)
+            owner.bridge_closed(bridge)
 
     def _audio(self, query: dict) -> None:
         """The computer's sound, one binary message per 10 ms piece.  The
@@ -725,6 +763,26 @@ class _Handler(BaseHTTPRequestHandler):
             owner.bridge_closed(bridge)
 
 
+class _Latest:
+    """The newest frame for one listener; older ones are dropped."""
+
+    def __init__(self, first: bytes = b"") -> None:
+        self._frame = first
+        self._ready = threading.Condition()
+
+    def put(self, frame: bytes) -> None:
+        with self._ready:
+            self._frame = frame
+            self._ready.notify()
+
+    def take(self, timeout: float) -> bytes:
+        with self._ready:
+            if not self._frame:
+                self._ready.wait(timeout)
+            frame, self._frame = self._frame, b""
+            return frame
+
+
 class _WebServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -771,6 +829,8 @@ class TabletScreen(QObject):
     _resize = pyqtSignal()
     _client = pyqtSignal(str)
     _locked = pyqtSignal()
+    #: something the user should know about the picture ("" clears it)
+    notice = pyqtSignal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -797,6 +857,10 @@ class TabletScreen(QObject):
         self._input_lock = threading.Lock()
         self._speaker: tabletaudio.Speaker | None = None
         self._audio: tuple[_Bridge, queue.Queue] | None = None
+        self._capture: tabletvideo.Capture | None = None
+        self._video: tuple[_Bridge, _Latest] | None = None
+        self._video_ready = False
+        self._last_frame = b""
         self._layout_tries = 0
         self._layout_timer = QTimer(self)
         self._layout_timer.setInterval(250)
@@ -842,6 +906,7 @@ class TabletScreen(QObject):
                          daemon=True).start()
         self._open_input()
         self._open_audio()
+        self.notice.emit("")
         self._set_state("starting")
         s = self.settings
         self._start_monitor(geometry(s.size, s.tablet_width, s.tablet_height,
@@ -971,6 +1036,86 @@ class TabletScreen(QObject):
         except (ValueError, TypeError, IndexError, KeyError, OSError,
                 OverflowError, RecursionError):
             pass
+
+    # ------------------------------------------------------------ picture
+    @property
+    def has_video(self) -> bool:
+        return self._video_ready
+
+    def _start_video(self) -> None:
+        if self.settings.picture != "fast" or not tabletvideo.available():
+            return
+        if self._capture is None:
+            self._capture = tabletvideo.Capture(self._video_out, self)
+            self._capture.ready.connect(self._video_started)
+            self._capture.failed.connect(self._video_failed)
+            self._capture.token.connect(self._video_token)
+        self._capture.start("Virtual-" + OUTPUT, self.settings.video_token)
+
+    def _stop_video(self) -> None:
+        self._video_ready = False
+        self._last_frame = b""
+        if self._capture is not None:
+            self._capture.stop()
+        with self._lock:
+            video, self._video = self._video, None
+        if video is not None:
+            video[0].close()
+
+    def _video_started(self) -> None:
+        self._video_ready = True
+        self.notice.emit("")
+        # A page showing the VNC picture reconnects and gets this one.
+        with self._lock:
+            bridges, self._bridges = self._bridges, []
+        for bridge in bridges:
+            bridge.close()
+
+    def _video_failed(self, reason: str) -> None:
+        was_ready, self._video_ready = self._video_ready, False
+        if not self.running:
+            return
+        if reason == "":
+            self.notice.emit(_("Recording the screen was not allowed, so the "
+                               "slower picture is used."))
+        elif reason == "wrong screen":
+            self.notice.emit(_("Another screen was chosen; share the screen "
+                               "named URDP-Tablet for the fast picture. The "
+                               "slower picture is used for now."))
+        else:
+            self.notice.emit(_("The fast picture could not start ({reason}); "
+                               "the slower picture is used.")
+                             .format(reason=reason))
+        if was_ready:
+            with self._lock:
+                video, self._video = self._video, None
+            if video is not None:
+                video[0].close()
+
+    def _video_token(self, token: str) -> None:
+        if token != self.settings.video_token:
+            self.settings.video_token = token
+            save_settings(self.settings)
+
+    def video_opened(self, bridge: _Bridge) -> _Latest:
+        frames = _Latest(self._last_frame)
+        with self._lock:
+            old, self._video = self._video, (bridge, frames)
+        if old is not None:
+            old[0].close()
+        return frames
+
+    def video_closed(self, bridge: _Bridge) -> None:
+        with self._lock:
+            if self._video is not None and self._video[0] is bridge:
+                self._video = None
+
+    def _video_out(self, frame: bytes) -> None:
+        """From the capture's reader thread."""
+        self._last_frame = frame
+        video = self._video
+        if video is not None:
+            video[1].put(frame)
 
     # ------------------------------------------------------------- sound
     @property
@@ -1165,6 +1310,7 @@ class TabletScreen(QObject):
         self._layout_timer.start()
 
     def _stop_monitor(self) -> None:
+        self._stop_video()
         self._layout_timer.stop()
         process, self._process = self._process, None
         if process is not None:
@@ -1236,6 +1382,7 @@ class TabletScreen(QObject):
                 self._input.set_area(vx, vy, logical_w, logical_h, right, bottom)
         with self._lock:
             self._restarting = False
+        self._start_video()
         self._set_state("connected" if self._client_address else "waiting",
                         self._client_address)
 

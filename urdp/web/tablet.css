@@ -16,6 +16,9 @@ html, body {
   inset: 0;
 }
 
+/* The fast picture; fastview.js sizes and centres it. */
+#screen canvas.fast { position: absolute; }
+
 #panel {
   position: fixed;
   left: 50%;
