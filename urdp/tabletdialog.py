@@ -79,6 +79,9 @@ class TabletDialog(QDialog):
         self.mic_box = QComboBox()
         for value, label in tablet.MICS:
             self.mic_box.addItem(_(label), value)
+        self.camera_box = QComboBox()
+        for value, label in tablet.CAMERAS:
+            self.camera_box.addItem(_(label), value)
         self.port_box = QSpinBox()
         self.port_box.setRange(1024, 65535)
         form.addRow(_("Position:"), self.position_box)
@@ -90,6 +93,8 @@ class TabletDialog(QDialog):
             form.addRow(_("Sound:"), self.sound_box)
         if self.screen_.mic_possible():
             form.addRow(_("Microphone:"), self.mic_box)
+        if self.screen_.camera_possible():
+            form.addRow(_("Camera:"), self.camera_box)
         form.addRow(_("Port:"), self.port_box)
         layout.addLayout(form)
 
@@ -113,6 +118,12 @@ class TabletDialog(QDialog):
             "Advanced, then continue to the address."))
         self.tls_note.setVisible(False)
         layout.addWidget(self.tls_note)
+        self.camera_note = hint(_(
+            "Programs that use PipeWire see the camera (OBS, Firefox). For "
+            "every program, load the v4l2loopback module; the README tells "
+            "how."))
+        self.camera_note.setVisible(False)
+        layout.addWidget(self.camera_note)
 
         self.status = QLabel()
         self.status.setWordWrap(True)
@@ -146,6 +157,7 @@ class TabletDialog(QDialog):
             lambda: self.screen_.set_sound(self.sound_box.currentData()))
         self.mic_box.currentIndexChanged.connect(
             lambda: self.screen_.set_mic(self.mic_box.currentData()))
+        self.camera_box.currentIndexChanged.connect(self._camera_changed)
         self.port_box.valueChanged.connect(self._save)
         self.btn_copy.clicked.connect(self._copy)
         self.btn_code.clicked.connect(self._new_code)
@@ -163,6 +175,8 @@ class TabletDialog(QDialog):
         self.input_box.setCurrentIndex(max(0, self.input_box.findData(s.input)))
         self.sound_box.setCurrentIndex(max(0, self.sound_box.findData(s.sound)))
         self.mic_box.setCurrentIndex(max(0, self.mic_box.findData(s.mic)))
+        self.camera_box.setCurrentIndex(
+            max(0, self.camera_box.findData(s.camera)))
         self.picture_box.setCurrentIndex(
             max(0, self.picture_box.findData(s.picture)))
         self.port_box.setValue(s.port)
@@ -218,6 +232,14 @@ class TabletDialog(QDialog):
             self._save()
             self.screen_.start()
 
+    def _camera_changed(self) -> None:
+        self.screen_.set_camera(self.camera_box.currentData())
+        self._show_camera_note()
+
+    def _show_camera_note(self) -> None:
+        self.camera_note.setVisible(self.screen_.camera_kind == "pipewire")
+        self.adjustSize()
+
     def _show_notice(self, text: str) -> None:
         self.picture_note.setText(text)
         self.picture_note.setVisible(bool(text))
@@ -233,6 +255,7 @@ class TabletDialog(QDialog):
         for widget in (self.code_image, self.address, self.btn_copy):
             widget.setVisible(running)
         self.tls_note.setVisible(running and self._url().startswith("https:"))
+        self.camera_note.setVisible(self.screen_.camera_kind == "pipewire")
         self.others.setVisible(running and len(self.addresses) > 1)
         self.adjustSize()
         texts = {"stopped": _("Stopped"),

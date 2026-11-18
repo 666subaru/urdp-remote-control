@@ -35,6 +35,7 @@ arayüzdür.** FreeRDP kurulu değilse hiçbir şey yapamaz, o yüzden ilk şart
 | `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | İkinci ekran sesi | Hayır |
 | GStreamer (`gst-launch-1.0`, PipeWire eklentisi; VA-API eklentileri isteğe bağlı) | İkinci ekran hızlı görüntü | Hayır |
 | `openssl`, `pacat` | İkinci ekran HTTPS ve mikrofon | Hayır |
+| GStreamer JPEG eklentileri; `v4l2loopback` isteğe bağlı | İkinci ekran kamera | Hayır |
 
 FreeRDP **3** gerekiyor. FreeRDP 2 birçok seçeneği farklı yazar
 (`/cert-tofu`, `/monitor-list` gibi); uygulama eski bir sürüm bulursa durum
@@ -213,13 +214,28 @@ gereken **tek bir port** vardır (varsayılan 1701).
   kez sorar ve sesi önce temizler: yankı engelleme, tabletten çalan
   bilgisayar sesini mikrofondan uzak tutar. Paylaşım durunca önceki giriş
   geri gelir.
-- **HTTPS.** Tarayıcılar mikrofonu yalnız HTTPS sayfalarına verir; bu yüzden
+- **Kamera.** **Kamera: Tabletin ön/arka kamerası** seçiliyken sayfa o
+  kameranın gördüğünü JPEG olarak gönderir (saniyede 30'a kadar), GStreamer
+  da paylaşım sürdükçe bunu bu bilgisayarda 1280 × 720 bir kamera yapar:
+  "URDP Tablet Camera" (dik duran tablette yanlarda siyah bant olur).
+  Yüklü ve yazılabilir bir `v4l2loopback` aygıtı varsa URDP onu kullanır ve
+  kamerayı her program görür. Yoksa URDP bir PipeWire kamerası yapar; onu
+  PipeWire kullanan programlar görür (OBS, Firefox, KDE'nin kendi
+  programları), diğerleri görmez. Modülü yüklemek için (root olarak; ikinci
+  satır yeniden başlatmadan sonra da yüklenmesini sağlar):
+
+  ```bash
+  sudo modprobe v4l2loopback exclusive_caps=1 card_label="URDP Tablet Camera"
+  echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf
+  echo 'options v4l2loopback exclusive_caps=1 card_label="URDP Tablet Camera"' | sudo tee /etc/modprobe.d/v4l2loopback.conf
+  ```
+- **HTTPS.** Tarayıcılar mikrofonu ve kamerayı yalnız HTTPS sayfalarına verir; bu yüzden
   URDP `openssl` ile kendi sertifikasını yapar (`~/.config/urdp/tablet-tls/`
   içinde saklanır) ve sayfayı HTTPS ile sunar; eski bir `http://` adresi
   oraya yönlendirilir. Yerel bir adres tarayıcının güvendiği bir sertifika
   alamaz; bu yüzden ilk seferde tabletin tarayıcısı bağlantının gizli
   olmadığını söyler: *Gelişmiş*'i seçip devam edin. `openssl` yoksa sayfa
-  düz HTTP'de kalır ve mikrofon sunulmaz.
+  düz HTTP'de kalır; mikrofon ve kamera sunulmaz.
 - **Ekran açık kalır.** Sayfa ekranı uyanık tutma kilidi alır, ayrıca
   görüntünün arkasında küçük, sessiz bir video oynatır; kilit olmayan yerde
   de Android ekranı karartmaz.
@@ -346,7 +362,7 @@ Kod düzeni:
 | `theme.py` / `widgets.py` | Karanlık tema ve ortak parçalar |
 | `tab_*.py` | Beş sekme |
 | `mainwindow.py` | Pencere, profil yönetimi, bağlanma akışı |
-| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `tabletmic.py`, `tablettls.py`, `web/` | İkinci ekran: sanal ekran, web sunucusu, ses, hızlı görüntü, mikrofon, HTTPS, sayfa |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `tabletmic.py`, `tabletcamera.py`, `tablettls.py`, `web/` | İkinci ekran: sanal ekran, web sunucusu, ses, hızlı görüntü, mikrofon, kamera, HTTPS, sayfa |
 | `qr.py` | Tablet adresi için küçük QR üreticisi |
 
 ## Lisans

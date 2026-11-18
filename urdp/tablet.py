@@ -14,11 +14,12 @@ server, so the tablet needs nothing but its browser:
 * ``/ws`` is a WebSocket bridged to the VNC server on this machine,
   ``/input`` one that carries touch, pen and keys, ``/audio`` one that
   brings the computer's sound (``tabletaudio``), ``/video`` the fast picture
-  (``tabletvideo``) and ``/mic`` the tablet's microphone (``tabletmic``);
-  each wants a ticket.
+  (``tabletvideo``), ``/mic`` the tablet's microphone (``tabletmic``) and
+  ``/camera`` its camera (``tabletcamera``); each wants a ticket.
 
 The page is served over HTTPS with a certificate URDP makes for itself
-(``tablettls``), because browsers give only HTTPS pages the microphone; the
+(``tablettls``), because browsers give only HTTPS pages the microphone and
+camera; the
 tablet's browser warns about it the first time.  Without ``openssl`` it
 stays on plain HTTP.
 
@@ -61,7 +62,8 @@ from urllib.parse import parse_qs, urlsplit
 from PyQt6.QtCore import (QObject, QProcess, QProcessEnvironment, QTimer,
                           pyqtSignal)
 
-from . import tabletaudio, tabletmic, tablettls, tabletvideo, uinput
+from . import (tabletaudio, tabletcamera, tabletmic, tablettls, tabletvideo,
+               uinput)
 from .i18n import gettext as _
 from .store import config_dir
 
@@ -94,6 +96,10 @@ INPUTS = [("mouse", "As a mouse (works in every program)"),
 SOUNDS = [("computer", "On the computer"), ("tablet", "On the tablet")]
 #: How the picture reaches the tablet.
 MICS = [("off", "Off"), ("tablet", "The tablet's microphone")]
+CAMERAS = [("off", "Off"), ("front", "The tablet's front camera"),
+           ("back", "The tablet's back camera")]
+#: What the page asks the browser for (getUserMedia's facingMode).
+_FACING = {"front": "user", "back": "environment"}
 PICTURES = [("fast", "Fast (asks once for permission to record the screen)"),
             ("vnc", "Compatible (slower)")]
 #: The sizes that follow the tablet (their labels are translated).
@@ -122,6 +128,8 @@ class Settings:
     picture: str = "fast"
     #: "off" or "tablet" (see MICS)
     mic: str = "off"
+    #: "off", "front" or "back" (see CAMERAS)
+    camera: str = "off"
     #: The ScreenCast portal's restore token, so it asks only once.
     video_token: str = ""
     code: str = ""
@@ -162,6 +170,8 @@ def load_settings() -> Settings:
         settings.picture = "fast"
     if settings.mic not in dict(MICS):
         settings.mic = "off"
+    if settings.camera not in dict(CAMERAS):
+        settings.camera = "off"
     if not 1024 <= settings.port <= 65535:
         settings.port = DEFAULT_PORT
     if not (200 <= settings.tablet_width <= 8192
@@ -432,6 +442,7 @@ def page_strings() -> dict[str, str]:
             "sound": _("Touch the screen to turn on the sound."),
             "mic": _("Touch the screen to turn on the microphone."),
             "nomic": _("The browser did not allow the microphone."),
+            "nocamera": _("The browser did not allow the camera."),
             "connect": _("Connect"),
             "fullscreen": _("Full Screen")}
 
@@ -584,7 +595,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/":
             path = "/tablet.html"
         if (path in ("/nonce", "/hello", "/ws", "/input", "/audio", "/video",
-                     "/mic") and not self._same_site()):
+                     "/mic", "/camera") and not self._same_site()):
             self._send(403, b"forbidden", "text/plain")
         elif path == "/nonce":
             self._json({"nonce": self.server.owner.new_nonce(),
@@ -602,6 +613,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._video(query)
         elif path == "/mic":
             self._mic(query)
+        elif path == "/camera":
+            self._camera(query)
         else:
             self._static(path)
 
@@ -659,7 +672,7 @@ class _Handler(BaseHTTPRequestHandler):
         restart = owner.tablet_seen(w, h, ratio)
         answer.update(ok=True, restart=restart, input=owner.has_input,
                       audio=owner.has_audio, video=owner.has_video,
-                      mic=owner.has_mic,
+                      mic=owner.has_mic, camera=owner.camera_facing,
                       ticket=owner.new_ticket(self.client_address[0]),
                       password=seal(owner.key(), nonce, owner.vnc_password))
         self._json(answer)
@@ -793,6 +806,26 @@ class _Handler(BaseHTTPRequestHandler):
             bridge.run()
         finally:
             owner.mic_closed(bridge)
+
+    def _camera(self, query: dict) -> None:
+        """What the tablet's camera sees, one JPEG per binary message."""
+        owner = self.server.owner
+        epoch = self._may_upgrade(query, "camera")
+        if not epoch:
+            return
+        if not owner.camera_facing:
+            self._send(503, b"no camera", "text/plain")
+            return
+        self._upgrade()
+        bridge = _Bridge(self.connection, self.rfile)
+        bridge.on_message = lambda picture: owner.camera_in(bridge, picture)
+        if not owner.camera_opened(bridge, epoch):    # shut out meanwhile
+            bridge.close()
+            return
+        try:
+            bridge.run()
+        finally:
+            owner.camera_closed(bridge)
 
     def _websocket(self, query: dict) -> None:
         owner = self.server.owner
@@ -961,6 +994,8 @@ class TabletScreen(QObject):
         self._capture: tabletvideo.Capture | None = None
         self._mic: tabletmic.Microphone | None = None
         self._mic_bridge: _Bridge | None = None
+        self._camera: tabletcamera.Camera | None = None
+        self._camera_bridge: _Bridge | None = None
         self._tls_context: ssl.SSLContext | None = None
         self._tls_tried = False
         self._video: tuple[_Bridge, _Latest] | None = None
@@ -1024,6 +1059,7 @@ class TabletScreen(QObject):
         self._open_input()
         self._open_audio()
         self._open_mic()
+        self._open_camera()
         self.notice.emit("")
         self._set_state("starting")
         s = self.settings
@@ -1043,6 +1079,7 @@ class TabletScreen(QObject):
         self._close_input()
         self._close_audio()
         self._close_mic()
+        self._close_camera()
         self._stop_monitor()
         self._client_address = ""
         self._set_state("stopped")
@@ -1060,11 +1097,13 @@ class TabletScreen(QObject):
             self._epoch += 1
             bridges, self._bridges = self._bridges, []
             for channel in (self._input_bridge, self._mic_bridge,
+                            self._camera_bridge,
                             self._audio and self._audio[0],
                             self._video and self._video[0]):
                 if channel is not None:
                     bridges.append(channel)
-            self._audio = self._video = self._mic_bridge = None
+            self._audio = self._video = None
+            self._mic_bridge = self._camera_bridge = None
         for bridge in bridges:
             bridge.close()
         if self.running:
@@ -1380,6 +1419,74 @@ class TabletScreen(QObject):
         mic = self._mic
         if mic is not None and bridge is self._mic_bridge:
             mic.write(piece)
+
+    # ------------------------------------------------------------ camera
+    @property
+    def camera_facing(self) -> str:
+        """What the page should ask its browser for ("" when off)."""
+        if self._camera is None:
+            return ""
+        return _FACING.get(self.settings.camera, "")
+
+    @property
+    def camera_kind(self) -> str:
+        """"v4l2" (every program sees it), "pipewire" or "" (off)."""
+        return self._camera.kind if self._camera is not None else ""
+
+    def camera_possible(self) -> bool:
+        return tabletcamera.available() and self.tls() is not None
+
+    def _open_camera(self) -> None:
+        if (self.settings.camera in _FACING and self._camera is None
+                and self._server is not None and self._server.tls is not None):
+            camera = tabletcamera.Camera()
+            self._camera = camera if camera.start() else None
+
+    def set_camera(self, camera: str) -> None:
+        """Like set_sound; the page reconnects to learn about it."""
+        if camera == self.settings.camera:
+            return
+        self.settings.camera = camera
+        save_settings(self.settings)
+        if not self.running:
+            return
+        if camera in _FACING:
+            self._open_camera()
+            with self._lock:
+                bridges, self._bridges = self._bridges, []
+                old, self._camera_bridge = self._camera_bridge, None
+            for bridge in bridges + ([old] if old else []):
+                bridge.close()                  # front <-> back, too
+        else:
+            self._close_camera()
+
+    def _close_camera(self) -> None:
+        with self._lock:
+            bridge, self._camera_bridge = self._camera_bridge, None
+        if bridge is not None:
+            bridge.close()
+        camera, self._camera = self._camera, None
+        if camera is not None:
+            camera.stop()
+
+    def camera_opened(self, bridge: _Bridge, epoch: int) -> bool:
+        with self._lock:
+            if epoch != self._epoch:
+                return False
+            old, self._camera_bridge = self._camera_bridge, bridge
+        if old is not None:
+            old.close()
+        return True
+
+    def camera_closed(self, bridge: _Bridge) -> None:
+        with self._lock:
+            if self._camera_bridge is bridge:
+                self._camera_bridge = None
+
+    def camera_in(self, bridge: _Bridge, picture: bytes) -> None:
+        camera = self._camera
+        if camera is not None and bridge is self._camera_bridge:
+            camera.write(picture)
 
     # ------------------------------------------- called from web threads
     def key(self) -> bytes:

@@ -36,6 +36,7 @@ FreeRDP.** Without FreeRDP it can do nothing, so that is the first requirement.
 | `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | Second screen sound | No |
 | GStreamer (`gst-launch-1.0`, PipeWire plugin; VA-API plugins optional) | Second screen fast picture | No |
 | `openssl`, `pacat` | Second screen HTTPS and microphone | No |
+| GStreamer JPEG plugins; `v4l2loopback` optional | Second screen camera | No |
 
 FreeRDP **3** is required. FreeRDP 2 spells many options differently
 (`/cert-tofu`, `/monitor-list`); if an older version is found, the application
@@ -216,13 +217,28 @@ reachable from the network.
   the microphone and cleans the sound first: its echo cancelling keeps the
   computer's sound, playing from the tablet, out of it. The previous input
   comes back when sharing stops.
-- **HTTPS.** Browsers give only HTTPS pages the microphone, so URDP makes
+- **Camera.** With **Camera: The tablet's front/back camera**, the page
+  sends what that camera sees as JPEGs (up to 30 a second), and GStreamer
+  turns them into a 1280 × 720 camera on this computer, "URDP Tablet
+  Camera", while sharing runs (an upright tablet gets black bars at the
+  sides). When a `v4l2loopback` device is loaded and writable, URDP uses it,
+  and every program sees the camera. Without one, URDP makes a PipeWire
+  camera, which programs that use PipeWire see (OBS, Firefox, KDE's own)
+  and others do not. To load the module (as root; the second line keeps it
+  after a restart):
+
+  ```bash
+  sudo modprobe v4l2loopback exclusive_caps=1 card_label="URDP Tablet Camera"
+  echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf
+  echo 'options v4l2loopback exclusive_caps=1 card_label="URDP Tablet Camera"' | sudo tee /etc/modprobe.d/v4l2loopback.conf
+  ```
+- **HTTPS.** Browsers give only HTTPS pages the microphone and camera, so URDP makes
   its own certificate with `openssl` (kept in `~/.config/urdp/tablet-tls/`)
   and serves the page over HTTPS; an old `http://` address is sent on. A
   local address cannot have a certificate a browser trusts, so the first
   time the tablet's browser warns that the connection is not private:
   choose *Advanced* and continue. Without `openssl` the page stays on plain
-  HTTP and the microphone is not offered.
+  HTTP and the microphone and camera are not offered.
 - **Screen stays on.** The page holds a screen wake lock and also plays a
   tiny silent video behind the picture, which keeps Android from dimming the
   tablet where the wake lock is not available.
@@ -349,7 +365,7 @@ integrity, and the tablet screen's sizing, layout, QR codes and web bridge.
 | `theme.py`, `widgets.py` | Dark theme and shared pieces |
 | `tab_*.py` | The five tabs |
 | `mainwindow.py` | Window, profile management, connect flow |
-| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `tabletmic.py`, `tablettls.py`, `web/` | Second screen: virtual screen, web server, sound, fast picture, microphone, HTTPS, page |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `tabletmic.py`, `tabletcamera.py`, `tablettls.py`, `web/` | Second screen: virtual screen, web server, sound, fast picture, microphone, camera, HTTPS, page |
 | `qr.py` | Small QR encoder for the tablet address |
 
 ## Licence

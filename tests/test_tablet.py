@@ -187,6 +187,9 @@ class _Owner:
     mic_opened = tablet.TabletScreen.mic_opened
     mic_closed = tablet.TabletScreen.mic_closed
     mic_in = tablet.TabletScreen.mic_in
+    camera_opened = tablet.TabletScreen.camera_opened
+    camera_closed = tablet.TabletScreen.camera_closed
+    camera_in = tablet.TabletScreen.camera_in
 
     def __init__(self, vnc_port):
         self.vnc_port = vnc_port
@@ -211,6 +214,10 @@ class _Owner:
         self._mic = unittest.mock.Mock(write=self.heard.append)
         self._mic_bridge = None
         self.has_mic = True
+        self.seen_pictures = []
+        self._camera = unittest.mock.Mock(write=self.seen_pictures.append)
+        self._camera_bridge = None
+        self.camera_facing = "user"
         self._video_ready = True
         self._last_frame = b""
         self._epoch = 1
@@ -535,6 +542,33 @@ class ServerTest(unittest.TestCase):
         sock.close()
         self.assertIn(" 503 ", head.splitlines()[0])
 
+    def test_camera_channel_takes_pictures(self):
+        sock, _, head = self._handshake(self._ticket(), "/camera")
+        self.assertIn(" 101 ", head.splitlines()[0])
+        mask = b"\x0a\x0b\x0c\x0d"
+        picture = b"\xff\xd8" + os.urandom(70_000) + b"\xff\xd9"
+        sock.sendall(bytes([0x82, 0xFF]) + struct.pack("!Q", len(picture))
+                     + mask + tablet._unmask(picture, mask))
+        for _ in range(100):
+            if self.owner.seen_pictures:
+                break
+            threading.Event().wait(0.02)
+        self.assertEqual(self.owner.seen_pictures, [picture])
+        sock.close()
+
+    def test_camera_needs_a_ticket_and_the_camera(self):
+        sock, _, head = self._handshake("wrong", "/camera")
+        sock.close()
+        self.assertIn(" 403 ", head.splitlines()[0])
+        self.owner.camera_facing = ""
+        sock, _, head = self._handshake(self._ticket(), "/camera")
+        sock.close()
+        self.assertIn(" 503 ", head.splitlines()[0])
+
+    def test_hello_says_which_camera(self):
+        answer = self.hello()[0]
+        self.assertEqual((answer["mic"], answer["camera"]), (True, "user"))
+
     def test_only_the_newest_mic_is_heard(self):
         old, new = unittest.mock.Mock(), unittest.mock.Mock()
         self.assertTrue(self.owner.mic_opened(old, 1))
@@ -623,18 +657,19 @@ class VideoStateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 unittest.mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}):
             screen = self._screen(tmp)
-            channels = [unittest.mock.Mock() for _ in range(5)]
+            channels = [unittest.mock.Mock() for _ in range(6)]
             screen._bridges = [channels[0]]
             screen._input_bridge = channels[1]
             screen._audio = (channels[2], None)
             screen._video = (channels[3], None)
             screen._mic_bridge = channels[4]
+            screen._camera_bridge = channels[5]
             epoch = screen._epoch
             screen.new_code()
             for channel in channels:
                 channel.close.assert_called()
-            self.assertEqual((screen._audio, screen._video,
-                              screen._mic_bridge), (None, None, None))
+            self.assertEqual((screen._audio, screen._video, screen._mic_bridge,
+                              screen._camera_bridge), (None,) * 4)
             self.assertEqual(screen._epoch, epoch + 1)
 
 
@@ -797,6 +832,109 @@ class MicrophoneTest(unittest.TestCase):
             process.kill()
             process.wait()
             mic._process = None
+
+
+class CameraTest(unittest.TestCase):
+    def test_pipewire_without_a_loopback_device(self):
+        from urdp import tabletcamera
+        args = tabletcamera.pipeline("")
+        self.assertIn("pipewiresink", args)
+        # One argument, quoted for gst-launch, keeps the name with spaces.
+        self.assertTrue(args[-1].startswith('stream-properties="'))
+        self.assertIn('node.description=\\"URDP Tablet Camera\\"', args[-1])
+        args = tabletcamera.pipeline("/dev/video7")
+        self.assertEqual(args[-3:], ["v4l2sink", "device=/dev/video7",
+                                     "sync=false"])
+
+    def test_only_loopback_devices_are_used(self):
+        from urdp import tabletcamera
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, where in (("video0", "pci0000:00/usb3/video4linux"),
+                                ("video9", "virtual/video4linux")):
+                target = Path(tmp, "devices", where, name)
+                target.mkdir(parents=True)
+                os.symlink(target, Path(tmp, name))
+            with unittest.mock.patch.object(
+                    tabletcamera.glob, "glob",
+                    return_value=[str(Path(tmp, "video0")),
+                                  str(Path(tmp, "video9"))]), \
+                    unittest.mock.patch.object(tabletcamera.os, "access",
+                                               return_value=True) as access:
+                self.assertEqual(tabletcamera.loopback(), "/dev/video9")
+                access.assert_called_once_with("/dev/video9", os.W_OK)
+
+    def test_pictures_go_whole_or_not_at_all(self):
+        from urdp import tabletcamera
+        camera = tabletcamera.Camera()
+        process = subprocess.Popen(["sleep", "30"], stdin=subprocess.PIPE)
+        fd = process.stdin.fileno()
+        os.set_blocking(fd, False)
+        camera._process = process
+        try:
+            picture = b"\xff\xd8" + bytes(100_000) + b"\xff\xd9"
+            for bad in (b"not a jpeg", b"\xff\xd8" + bytes(10),
+                        b"\xff\xd8" + bytes(tabletcamera.MAX_PICTURE) + b"\xff\xd9"):
+                camera.write(bad)
+            self.assertEqual(self._waiting(fd), 0)
+            done = threading.Event()
+
+            def flood():
+                for _ in range(50):                  # nobody reads: no block
+                    camera.write(picture)
+                done.set()
+
+            threading.Thread(target=flood, daemon=True).start()
+            self.assertTrue(done.wait(5))
+            waiting = self._waiting(fd)
+            self.assertEqual(waiting % len(picture), 0)           # whole ones
+            self.assertLessEqual(waiting, tabletcamera.BACKLOG * len(picture))
+        finally:
+            process.kill()
+            process.wait()
+            camera._process = None
+
+    @staticmethod
+    def _waiting(fd):
+        import fcntl
+        import termios
+        return int.from_bytes(fcntl.ioctl(fd, termios.FIONREAD, b"\0" * 4),
+                              "little")
+
+    def test_camera_follows_the_setting(self):
+        from PyQt6.QtCore import QCoreApplication
+        from urdp import tabletcamera
+        self.app = QCoreApplication.instance() or QCoreApplication([])
+
+        class FakeCamera:
+            kind = "pipewire"
+
+            def start(self):
+                return True
+
+            def stop(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
+                unittest.mock.patch.object(tabletcamera, "Camera", FakeCamera):
+            screen = tablet.TabletScreen()
+            screen._server = unittest.mock.Mock(tls=object())   # HTTPS on
+            self.assertEqual(screen.camera_facing, "")
+            screen.set_camera("back")
+            self.assertEqual((screen.camera_facing, screen.camera_kind),
+                             ("environment", "pipewire"))
+            old = unittest.mock.Mock()
+            screen._camera_bridge = old
+            screen.set_camera("front")                # the page reconnects
+            old.close.assert_called_once()
+            self.assertEqual(screen.camera_facing, "user")
+            self.assertEqual(tablet.load_settings().camera, "front")
+            screen.set_camera("off")
+            self.assertEqual((screen.camera_facing, screen.camera_kind), ("", ""))
+            screen._server = unittest.mock.Mock(tls=None)       # plain HTTP
+            screen.set_camera("back")
+            self.assertEqual(screen.camera_facing, "")
+            screen._server = None
 
 
 class SpeakerTest(unittest.TestCase):

@@ -45,8 +45,8 @@ def from_tables() -> dict[str, None]:
     from urdp.tab_local import (AUDIO_BACKENDS, AUDIO_MODES, KEYBOARD_MODES,
                                 LAYOUTS)
     from urdp.session import _MESSAGES
-    from urdp.tablet import (FOLLOW, INPUTS, MICS, PICTURES, POSITIONS,
-                             SIZES, SOUNDS)
+    from urdp.tablet import (CAMERAS, FOLLOW, INPUTS, MICS, PICTURES,
+                             POSITIONS, SIZES, SOUNDS)
 
     found: dict[str, None] = {}
     for table in (COLOR_DEPTHS, AUDIO_MODES, AUDIO_BACKENDS, KEYBOARD_MODES,
@@ -56,7 +56,8 @@ def from_tables() -> dict[str, None]:
             found[label] = None
     for message in _MESSAGES.values():
         found[message] = None
-    for _value, label in POSITIONS + INPUTS + SOUNDS + PICTURES + MICS:
+    for _value, label in (POSITIONS + INPUTS + SOUNDS + PICTURES + MICS
+                          + CAMERAS):
         found[label] = None
     for value, label in SIZES:
         if value in FOLLOW:

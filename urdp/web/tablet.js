@@ -149,6 +149,8 @@ async function connect() {
     if (answer.audio) openAudio(ticket);
     if (answer.mic) openMic(ticket);
     else stopMic();
+    if (answer.camera) openCamera(ticket, answer.camera);
+    else stopCamera();
     document.body.classList.add('live');
     status(text('connected', 'Connected'));
     updateChrome();
@@ -160,6 +162,7 @@ async function connect() {
     if (inputSock) inputSock.close();
     if (audioSock) audioSock.close();
     if (micSock) micSock.close();
+    if (camSock) camSock.close();
     document.body.classList.remove('live');
     updateChrome();
     retryLater();
@@ -254,7 +257,8 @@ function soundHint() {
   if (sound) hint.textContent = text('sound', 'Touch the screen to turn on the sound.');
   else if (mic) hint.textContent = text('mic', 'Touch the screen to turn on the microphone.');
   else if (micRefused) hint.textContent = text('nomic', 'The browser did not allow the microphone.');
-  hint.hidden = !(sound || mic || micRefused);
+  else if (camRefused) hint.textContent = text('nocamera', 'The browser did not allow the camera.');
+  hint.hidden = !(sound || mic || micRefused || camRefused);
 }
 
 function startSound() {
@@ -276,12 +280,19 @@ let micStream = null;
 let micSetup = null;
 let micRefused = false;
 const MIC_BACKLOG = 9600;        // bytes waiting to be sent: 100 ms
+let micGen = 0;                  // moves on with stopMic
 
 async function setupMic() {
   if (!navigator.mediaDevices || !window.AudioWorkletNode) throw new Error('no microphone here');
-  micStream = await navigator.mediaDevices.getUserMedia({
+  const gen = micGen;
+  const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
   });
+  if (gen !== micGen) {                    // stopped while the browser asked
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  micStream = stream;
   micCtx = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive' });
   micCtx.addEventListener('statechange', soundHint);
   await micCtx.audioWorklet.addModule('micworklet.js');
@@ -302,7 +313,9 @@ function openMic(ticket) {
   sock.addEventListener('close', () => { if (micSock === sock) micSock = null; soundHint(); });
   sock.addEventListener('error', () => sock.close());
   if (!micSetup) {
+    const gen = micGen;
     micSetup = setupMic().then(() => { micRefused = false; soundHint(); }, () => {
+      if (gen !== micGen) return;
       stopMic();
       micRefused = true;                   // said for a while, then dropped
       soundHint();
@@ -313,9 +326,104 @@ function openMic(ticket) {
 }
 
 function stopMic() {
+  micGen++;
   if (micStream) micStream.getTracks().forEach((track) => track.stop());
   if (micCtx) micCtx.close().catch(() => {});
   micStream = micCtx = micSetup = null;
+}
+
+// ----------------------------------------------------------------- camera
+// What the camera sees goes to the computer's "URDP Tablet Camera" as JPEGs,
+// up to 30 a second.  One picture is made at a time, and none while the
+// last ones are still on their way, so a slow network gets fewer pictures,
+// not older ones.  Like the microphone, the camera stays open across
+// reconnects (unless the computer asks for the other one).
+let camSock = null;
+let camStream = null;
+let camVideo = null;
+let camFacing = '';
+let camSetup = null;
+let camBusy = false;
+let camTimer = 0;
+let camRefused = false;
+let camCanvas = null;
+let camDraw = null;
+let camGen = 0;                  // moves on with stopCamera
+const CAM_BACKLOG = 256 * 1024;  // bytes waiting to be sent
+const CAM_QUALITY = 0.75;
+
+async function setupCamera(facing) {
+  if (!navigator.mediaDevices) throw new Error('no camera here');
+  const gen = camGen;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: facing }, width: { ideal: 1280 },
+             height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+  });
+  if (gen !== camGen) {                    // stopped while the browser asked
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  camStream = stream;
+  camVideo = document.createElement('video');
+  camVideo.muted = true;
+  camVideo.playsInline = true;
+  camVideo.srcObject = stream;
+  await camVideo.play();
+  camLoop();
+}
+
+function camLoop() {
+  if (!camVideo) return;
+  camTimer = setTimeout(camLoop, 1000 / 30);
+  const w = camVideo.videoWidth, h = camVideo.videoHeight;
+  if (camBusy || !w || !camSock || camSock.readyState !== WebSocket.OPEN
+      || camSock.bufferedAmount > CAM_BACKLOG) return;
+  if (!camCanvas || camCanvas.width !== w || camCanvas.height !== h) {
+    camCanvas = typeof OffscreenCanvas === 'function'
+      ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
+    camDraw = camCanvas.getContext('2d', { alpha: false });
+  }
+  camDraw.drawImage(camVideo, 0, 0, w, h);
+  camBusy = true;
+  const made = camCanvas.convertToBlob
+    ? camCanvas.convertToBlob({ type: 'image/jpeg', quality: CAM_QUALITY })
+    : new Promise((done) => camCanvas.toBlob(done, 'image/jpeg', CAM_QUALITY));
+  const sock = camSock;
+  made.then((blob) => blob.arrayBuffer())
+    .then((data) => { if (sock.readyState === WebSocket.OPEN) sock.send(data); })
+    .catch(() => {})
+    .finally(() => { camBusy = false; });
+}
+
+function openCamera(ticket, facing) {
+  if (camSetup && camFacing !== facing) stopCamera();      // the other one
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const sock = new WebSocket(`${scheme}://${location.host}/camera?t=${ticket}`);
+  sock.binaryType = 'arraybuffer';
+  sock.addEventListener('open', () => { camSock = sock; });
+  sock.addEventListener('close', () => { if (camSock === sock) camSock = null; });
+  sock.addEventListener('error', () => sock.close());
+  if (!camSetup) {
+    camFacing = facing;
+    const gen = camGen;
+    camSetup = setupCamera(facing).then(() => { camRefused = false; soundHint(); }, () => {
+      if (gen !== camGen) return;
+      stopCamera();
+      camRefused = true;                   // said for a while, then dropped
+      soundHint();
+      setTimeout(() => { camRefused = false; soundHint(); }, 5000);
+      sock.close();
+    });
+  }
+}
+
+function stopCamera() {
+  camGen++;
+  clearTimeout(camTimer);
+  if (camStream) camStream.getTracks().forEach((track) => track.stop());
+  if (camVideo) camVideo.srcObject = null;
+  camStream = camVideo = camSetup = null;
+  camFacing = '';
 }
 
 function direct() { return inputSock && inputSock.readyState === WebSocket.OPEN; }
