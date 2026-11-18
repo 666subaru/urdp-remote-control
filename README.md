@@ -193,11 +193,22 @@ reachable from the network.
   is view-only.
 - **Screen stays on.** The page plays a tiny silent video behind the picture,
   which keeps Android from dimming the tablet (the Wake Lock API needs HTTPS).
-- **Access.** Everything but the noVNC files needs the code, which travels in
+- **Access.** Everything but the page files needs the code, which travels in
   the URL fragment (never sent to the server or in a Referer) and is then
-  kept in the tablet browser. After 20 wrong codes access is blocked until
-  sharing is started again. **New Code** disconnects everyone. The connection
-  is plain HTTP, meant for a home or office network.
+  kept in the tablet browser. The code itself never crosses the network: the
+  page answers a one-time challenge with a key made from it (PBKDF2), gets a
+  ticket valid for a minute, and receives the VNC password sealed with that
+  key. An address that gives 5 wrong answers waits a minute; after 200 in all,
+  access is blocked until sharing is started again. **New Code** disconnects
+  everyone and gives the VNC server a new password.
+- **Whoever has the code controls this session.** The keyboard reaches every
+  window, terminals included, like a keyboard plugged into the computer. The
+  connection is plain HTTP: the code stays secret, but someone who can watch
+  the network sees the screen, and one who can alter its traffic can take
+  over. Use it on a home or office network you trust, or over a VPN such as
+  Tailscale. Other users of this computer can read the VNC password from the
+  process list (`krfb-virtualmonitor` takes it only as an argument) and view,
+  not control, the screen.
 - **Firewall.** If one is active, allow the port from the local network, for
   example `sudo ufw allow from 192.168.1.0/24 to any port 1701 proto tcp`.
 - **VPNs.** A VPN that takes over the local network's route (for example

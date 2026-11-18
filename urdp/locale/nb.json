@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Denne teksten legges ordrett til på slutten av kommandolinjen.",
  "This user is not allowed to use Remote Desktop.": "Denne brukeren har ikke lov til å bruke Eksternt skrivebord.",
  "Too many wrong codes; access is blocked until sharing is started again.": "For mange feil koder; tilgangen er blokkert til delingen startes på nytt.",
+ "Too many wrong codes; wait a minute and try again.": "For mange feil koder; vent et minutt og prøv igjen.",
  "Transport:": "Transport:",
  "Turkish F": "Tyrkisk F",
  "Turkish Q": "Tyrkisk Q",

@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "이 텍스트는 명령줄 끝에 그대로 추가됩니다.",
  "This user is not allowed to use Remote Desktop.": "이 사용자는 원격 데스크톱을 사용할 수 없습니다.",
  "Too many wrong codes; access is blocked until sharing is started again.": "잘못된 코드가 너무 많습니다. 공유를 다시 시작할 때까지 접근이 차단됩니다.",
+ "Too many wrong codes; wait a minute and try again.": "잘못된 코드를 너무 많이 입력했습니다. 1분 후에 다시 시도하세요.",
  "Transport:": "전송 방식:",
  "Turkish F": "터키어 F",
  "Turkish Q": "터키어 Q",

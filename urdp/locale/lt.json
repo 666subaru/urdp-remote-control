@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Šis tekstas pažodžiui pridedamas komandų eilutės gale.",
  "This user is not allowed to use Remote Desktop.": "Šiam naudotojui neleidžiama naudotis nuotoliniu darbalaukiu.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Per daug neteisingų kodų; prieiga užblokuota, kol bendrinimas bus paleistas iš naujo.",
+ "Too many wrong codes; wait a minute and try again.": "Per daug klaidingų kodų; palaukite minutę ir bandykite dar kartą.",
  "Transport:": "Perdavimas:",
  "Turkish F": "Turkiškas F",
  "Turkish Q": "Turkiškas Q",

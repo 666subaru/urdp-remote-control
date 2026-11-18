@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Questo testo viene aggiunto alla riga di comando così com'è.",
  "This user is not allowed to use Remote Desktop.": "Questo utente non è autorizzato a usare Desktop remoto.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Troppi codici errati; l'accesso è bloccato finché la condivisione non viene riavviata.",
+ "Too many wrong codes; wait a minute and try again.": "Troppi codici errati; attendi un minuto e riprova.",
  "Transport:": "Trasporto:",
  "Turkish F": "Turco F",
  "Turkish Q": "Turco Q",

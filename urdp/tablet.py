@@ -7,13 +7,20 @@ server, so the tablet needs nothing but its browser:
 
 * ``/`` serves a page built on noVNC (``web/``), which draws the screen and
   sends touch and pen input back.
-* ``/hello`` checks the access code, tells the page the VNC password, and
-  learns the tablet's screen size, so the virtual screen can match it.
-* ``/ws`` is a WebSocket bridged to the VNC server on this machine.
+* ``/nonce`` hands out a one-time challenge; ``/hello`` takes the answer,
+  proves the page knows the access code, and gives it a short-lived ticket
+  and the VNC password; it also learns the tablet's screen size, so the
+  virtual screen can match it.
+* ``/ws`` is a WebSocket bridged to the VNC server on this machine, and
+  ``/input`` one that carries touch, pen and keys; both want a ticket.
 
 The access code travels in the URL fragment of the address the QR code holds,
 which browsers never send to a server or put in a Referer; the page keeps it
-in its own storage.  Everything but the noVNC files is behind that code.
+in its own storage.  It never crosses the network: the page is plain HTTP, so
+it answers ``HMAC(key, nonce)`` with ``key = PBKDF2(code)``, and the VNC
+password comes back encrypted with that key.  Someone listening on the
+network learns neither; guessing the code offline from what they saw costs a
+PBKDF2 per guess.  Everything but the page files is behind the code.
 """
 
 from __future__ import annotations
@@ -23,15 +30,18 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
 import secrets
 import shutil
 import socket
+import string
 import struct
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import asdict, dataclass, fields
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -49,7 +59,14 @@ TOOL = "krfb-virtualmonitor"
 OUTPUT = "URDP-Tablet"                 # KWin names the screen "Virtual-URDP-Tablet"
 DEFAULT_PORT = 1701
 DEFAULT_SIZE = (1920, 1200)
-MAX_BAD_CODES = 20
+#: Wrong answers in all, after which sharing must be started again.
+MAX_BAD_CODES = 200
+#: Wrong answers from one address before it has to wait, and how long.
+IP_TRIES, IP_WAIT = 5, 60.0
+#: PBKDF2 rounds that turn the code into a key; the page does the same.
+KEY_ROUNDS = 20000
+NONCE_LIFE, TICKET_LIFE = 60.0, 60.0
+MAX_CONNECTIONS = 64
 
 #: Where the screen goes, as data so the labels can be translated on use.
 POSITIONS = [("right", "Right of the screens"), ("left", "Left of the screens"),
@@ -116,6 +133,12 @@ def load_settings() -> Settings:
         settings.input = "mouse"
     if not 1024 <= settings.port <= 65535:
         settings.port = DEFAULT_PORT
+    if not (200 <= settings.tablet_width <= 8192
+            and 200 <= settings.tablet_height <= 8192
+            and math.isfinite(settings.tablet_ratio)
+            and 0.5 <= settings.tablet_ratio <= 5):
+        settings.tablet_width = settings.tablet_height = 0
+        settings.tablet_ratio = 0.0
     if len(settings.code) < 8 or set(settings.code) - set(_CODE_ALPHABET):
         settings.code = new_code()
     return settings
@@ -297,6 +320,28 @@ def misrouted(address: Address, port: int) -> str:
     return dev if dev and dev != address.interface else ""
 
 
+def derive_key(code: str, salt: str) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", code.encode(), salt.encode(),
+                               KEY_ROUNDS, 32)
+
+
+def proof(key: bytes, purpose: str, nonce: str) -> bytes:
+    return hmac.new(key, f"{purpose}:{nonce}".encode(), "sha256").digest()
+
+
+def seal(key: bytes, nonce: str, secret: str) -> str:
+    """*secret* (at most 32 bytes) XORed with a pad only the code opens."""
+    data = secret.encode()
+    pad = proof(key, "vnc", nonce)
+    return bytes(a ^ b for a, b in zip(data, pad)).hex()
+
+
+def vnc_password() -> str:
+    """VNC reads only 8 characters; make each of them count."""
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(8))
+
+
 def free_local_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
@@ -325,7 +370,7 @@ def page_version() -> str:
     """Changes whenever the page's own files change, so an open page that
     reconnects to a newer URDP reloads itself instead of running old code."""
     digest = hashlib.sha256()
-    for name in ("tablet.html", "tablet.js", "tablet.css"):
+    for name in ("tablet.html", "tablet.js", "tablet.css", "auth.js"):
         try:
             digest.update((WEB_ROOT / name).read_bytes())
         except OSError:
@@ -340,6 +385,7 @@ def page_strings() -> dict[str, str]:
             "reconnecting": _("Reconnecting…"),
             "code": _("Enter the code shown in URDP on the computer."),
             "wrong": _("Wrong code"),
+            "wait": _("Too many wrong codes; wait a minute and try again."),
             "connect": _("Connect"),
             "fullscreen": _("Full Screen")}
 
@@ -435,7 +481,10 @@ class _Bridge:
                     if self.vnc is not None:
                         self.vnc.sendall(payload)
                     elif self.on_message is not None:
-                        self.on_message(payload)
+                        try:
+                            self.on_message(payload)
+                        except Exception:              # noqa: BLE001
+                            pass                # one bad message, not the link
                 elif opcode == 0x8:
                     try:
                         self.send(0x8, payload[:2])
@@ -452,6 +501,8 @@ class _Bridge:
 # ------------------------------------------------------------- web server
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    #: A connection that sends nothing is dropped; WebSockets clear this.
+    timeout = 15
     server: "_WebServer"
 
     def log_message(self, *_args) -> None:     # quiet; the UI shows status
@@ -468,7 +519,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; img-src 'self' data: blob:; "
-                         "connect-src 'self' ws: wss:; frame-ancestors 'none'")
+                         "connect-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -486,7 +537,13 @@ class _Handler(BaseHTTPRequestHandler):
         path = url.path
         if path == "/":
             path = "/tablet.html"
-        if path == "/hello":
+        if path in ("/nonce", "/hello", "/ws", "/input") and not self._same_site():
+            self._send(403, b"forbidden", "text/plain")
+        elif path == "/nonce":
+            self._json({"nonce": self.server.owner.new_nonce(),
+                        "salt": self.server.owner.salt, "rounds": KEY_ROUNDS,
+                        "strings": page_strings(), "version": page_version()})
+        elif path == "/hello":
             self._hello(query)
         elif path == "/ws":
             self._websocket(query)
@@ -495,9 +552,26 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._static(path)
 
+    def _same_site(self) -> bool:
+        """Turn away other web sites: a page elsewhere cannot answer the
+        challenge, but it could use up the wrong-code allowance (browsers
+        send Sec-Fetch-Site only to localhost and HTTPS), or open a
+        WebSocket here (browsers always send its Origin)."""
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None and site not in ("same-origin", "none"):
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            host = urlsplit(origin).netloc
+            return bool(host) and host == self.headers.get("Host", "")
+        return True
+
     def _static(self, path: str) -> None:
         root = WEB_ROOT.resolve()
-        target = (root / path.lstrip("/")).resolve()
+        try:
+            target = (root / path.lstrip("/")).resolve()
+        except (OSError, ValueError):          # a NUL in the path
+            target = root
         kind = _STATIC_TYPES.get(target.suffix)
         if (kind is None or not target.is_relative_to(root)
                 or not target.is_file()):
@@ -506,17 +580,14 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(200, target.read_bytes(), kind,
                    cache="/novnc/" in path)
 
-    def _code_ok(self, query: dict) -> bool | None:
-        """True / False, or None when too many wrong codes locked access."""
-        given = (query.get("k") or [""])[0]
-        return self.server.owner.check_code(given)
-
     def _hello(self, query: dict) -> None:
         owner = self.server.owner
         answer: dict = {"strings": page_strings(), "version": page_version()}
-        ok = self._code_ok(query)
-        if not ok:
-            answer.update(ok=False, reason="locked" if ok is None else "code")
+        nonce = (query.get("n") or [""])[0]
+        given = (query.get("p") or [""])[0]
+        result = owner.check_proof(nonce, given, self.client_address[0])
+        if result != "ok":
+            answer.update(ok=False, reason=result)
             self._json(answer)
             return
 
@@ -530,16 +601,19 @@ class _Handler(BaseHTTPRequestHandler):
         if not (200 <= w <= 8192 and 200 <= h <= 8192 and 0.5 <= ratio <= 5):
             w = h = ratio = 0.0
         restart = owner.tablet_seen(w, h, ratio)
-        answer.update(ok=True, password=owner.vnc_password, restart=restart,
-                      input=owner.has_input)
+        answer.update(ok=True, restart=restart, input=owner.has_input,
+                      ticket=owner.new_ticket(self.client_address[0]),
+                      password=seal(owner.key(), nonce, owner.vnc_password))
         self._json(answer)
 
-    def _may_upgrade(self, query: dict) -> bool:
+    def _may_upgrade(self, query: dict, use: str) -> bool:
         if (self.headers.get("Upgrade", "").lower() != "websocket"
                 or not self.headers.get("Sec-WebSocket-Key")):
             self._send(400, b"websocket expected", "text/plain")
             return False
-        if not self._code_ok(query):
+        ticket = (query.get("t") or [""])[0]
+        if not self.server.owner.use_ticket(ticket, use,
+                                            self.client_address[0]):
             self._send(403, b"forbidden", "text/plain")
             return False
         return True
@@ -562,7 +636,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _input(self, query: dict) -> None:
         owner = self.server.owner
-        if not self._may_upgrade(query):
+        if not self._may_upgrade(query, "input"):
             return
         if not owner.has_input:
             self._send(503, b"no input devices", "text/plain")
@@ -578,7 +652,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _websocket(self, query: dict) -> None:
         owner = self.server.owner
-        if not self._may_upgrade(query):
+        if not self._may_upgrade(query, "ws"):
             return
         try:
             vnc = socket.create_connection(("127.0.0.1", owner.vnc_port),
@@ -604,7 +678,26 @@ class _WebServer(ThreadingHTTPServer):
 
     def __init__(self, port: int, owner: "TabletScreen") -> None:
         self.owner = owner
+        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         super().__init__(("0.0.0.0", port), _Handler)
+
+    def process_request(self, request, client_address) -> None:
+        """At most MAX_CONNECTIONS at once, so idle connections cannot use
+        up the threads and files the tablet needs."""
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     def handle_error(self, request, client_address) -> None:
         """A tablet that drops off Wi-Fi is normal, not worth a traceback."""
@@ -640,6 +733,11 @@ class TabletScreen(QObject):
         self._bridges: list[_Bridge] = []
         self._client_address = ""
         self._bad_codes = 0
+        self._bad_from: dict[str, tuple[int, float]] = {}   # ip -> count, until
+        self._nonces: dict[str, float] = {}                 # nonce -> expiry
+        self._tickets: dict[str, tuple[str, float, set]] = {}
+        self.salt = secrets.token_hex(8)
+        self._key: tuple[str, str, bytes] | None = None
         self._restarting = False
         self._input: uinput.TabletInput | None = None
         self._input_bridge: _Bridge | None = None
@@ -670,9 +768,13 @@ class TabletScreen(QObject):
             self._set_state("error", problem)
             return
         save_settings(self.settings)
-        self.vnc_password = secrets.token_hex(4)    # VNC uses 8 characters
+        self.vnc_password = vnc_password()
         self.vnc_port = free_local_port()
-        self._bad_codes = 0
+        with self._lock:
+            self._bad_codes = 0
+            self._bad_from.clear()
+            self._nonces.clear()
+            self._tickets.clear()
         try:
             self._server = _WebServer(self.settings.port, self)
         except OSError as exc:
@@ -704,14 +806,23 @@ class TabletScreen(QObject):
         self._set_state("stopped")
 
     def new_code(self) -> None:
+        """Shut out everyone who had the old code, also from the VNC server
+        itself: it gets a new password, so the screen restarts."""
         self.settings.code = new_code()
         save_settings(self.settings)
         with self._lock:
+            self.salt = secrets.token_hex(8)
+            self._key = None
+            self._nonces.clear()
+            self._tickets.clear()
             bridges, self._bridges = self._bridges, []
             if self._input_bridge is not None:
                 bridges.append(self._input_bridge)
         for bridge in bridges:
             bridge.close()
+        if self.running:
+            self.vnc_password = vnc_password()
+            self._restart_monitor()
 
     # ------------------------------------------------------------- input
     @property
@@ -763,6 +874,12 @@ class TabletScreen(QObject):
         ``["x", text]``              text from the on-screen keyboard
         x and y run from 0 to 1 across the virtual screen.
         """
+        def number(value) -> float:
+            value = float(value)
+            if not math.isfinite(value):
+                raise ValueError(value)
+            return value
+
         try:
             event = json.loads(payload)
             kind = event[0]
@@ -774,39 +891,105 @@ class TabletScreen(QObject):
                 if kind == "t":
                     phase = {"d": "down", "m": "move", "u": "up"}[event[1]]
                     touch = device.touch_as_mouse if mouse else device.touch_event
-                    touch(phase, int(event[2]), float(event[3]), float(event[4]))
+                    touch(phase, int(event[2]), number(event[3]),
+                          number(event[4]))
                 elif kind == "p":
                     phase = {"h": "hover", "d": "down", "m": "move", "u": "up",
                              "o": "out"}[event[1]]
                     if mouse:
-                        device.pen_as_mouse(phase, float(event[2]),
-                                            float(event[3]), bool(event[7]))
+                        device.pen_as_mouse(phase, number(event[2]),
+                                            number(event[3]), bool(event[7]))
                     else:
-                        device.pen_event(phase, float(event[2]),
-                                         float(event[3]), float(event[4]),
-                                         float(event[5]), float(event[6]),
+                        device.pen_event(phase, number(event[2]),
+                                         number(event[3]), number(event[4]),
+                                         number(event[5]), number(event[6]),
                                          bool(event[7]), bool(event[8]))
                 elif kind == "k":
                     device.key(int(event[1]), bool(event[2]))
                 elif kind == "x":
                     device.type_text(str(event[1]))
                 elif kind == "w":
-                    device.scroll(max(-50.0, min(50.0, float(event[1]))),
-                                  max(-50.0, min(50.0, float(event[2]))))
-        except (ValueError, TypeError, IndexError, KeyError, OSError):
+                    device.scroll(max(-50.0, min(50.0, number(event[1]))),
+                                  max(-50.0, min(50.0, number(event[2]))))
+        except (ValueError, TypeError, IndexError, KeyError, OSError,
+                OverflowError, RecursionError):
             pass
 
     # ------------------------------------------- called from web threads
-    def check_code(self, given: str) -> bool | None:
+    def key(self) -> bytes:
+        """The key the code and salt make, worked out once for both."""
+        code, salt = self.settings.code, self.salt
+        cached = self._key
+        if cached is None or cached[:2] != (code, salt):
+            cached = (code, salt, derive_key(code, salt))
+            self._key = cached
+        return cached[2]
+
+    def new_nonce(self) -> str:
+        nonce = secrets.token_hex(16)
+        now = time.monotonic()
+        with self._lock:
+            for old in [n for n, t in self._nonces.items() if t < now]:
+                del self._nonces[old]
+            while len(self._nonces) >= 256:            # oldest first
+                del self._nonces[next(iter(self._nonces))]
+            self._nonces[nonce] = now + NONCE_LIFE
+        return nonce
+
+    def check_proof(self, nonce: str, given: str, address: str) -> str:
+        """"ok", or why not: "code" (wrong or missing), "wait" (this address
+        guessed too often) or "locked" (too many wrong answers in all)."""
+        now = time.monotonic()
         with self._lock:
             if self._bad_codes >= MAX_BAD_CODES:
-                return None
-            if hmac.compare_digest(given.encode(), self.settings.code.encode()):
-                return True
+                return "locked"
+            count, until = self._bad_from.get(address, (0, 0.0))
+            if until > now:
+                return "wait"
+            # Each challenge answers once, right or wrong.
+            fresh = self._nonces.pop(nonce, 0.0) > now
+        if not given or not fresh:
+            return "code"                 # no answer is not a guess
+        try:
+            answer = bytes.fromhex(given)
+        except ValueError:
+            answer = b""
+        if hmac.compare_digest(answer, proof(self.key(), "hello", nonce)):
+            with self._lock:
+                self._bad_from.pop(address, None)
+            return "ok"
+        with self._lock:
+            count += 1
+            if len(self._bad_from) >= 1024:
+                self._bad_from.clear()
+            self._bad_from[address] = (
+                count, now + IP_WAIT if count >= IP_TRIES else 0.0)
             self._bad_codes += 1
             if self._bad_codes >= MAX_BAD_CODES:
                 self._locked.emit()
-            return False
+        return "code"
+
+    def new_ticket(self, address: str) -> str:
+        """Lets *address* open the screen and the input channel once each,
+        within TICKET_LIFE seconds."""
+        ticket = secrets.token_urlsafe(24)
+        now = time.monotonic()
+        with self._lock:
+            for old in [t for t, v in self._tickets.items() if v[1] < now]:
+                del self._tickets[old]
+            while len(self._tickets) >= 64:
+                del self._tickets[next(iter(self._tickets))]
+            self._tickets[ticket] = (address, now + TICKET_LIFE, set())
+        return ticket
+
+    def use_ticket(self, ticket: str, use: str, address: str) -> bool:
+        with self._lock:
+            entry = self._tickets.get(ticket)
+            if (entry is None or entry[0] != address
+                    or entry[1] < time.monotonic() or use in entry[2]):
+                return False
+            entry[2].add(use)
+            return True
 
     def tablet_seen(self, width: float, height: float, ratio: float) -> bool:
         """Remember the tablet; True when the screen restarts to match it."""

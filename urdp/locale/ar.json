@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "يُضاف هذا النص إلى سطر الأوامر كما هو.",
  "This user is not allowed to use Remote Desktop.": "لا يُسمح لهذا المستخدم باستخدام سطح المكتب البعيد.",
  "Too many wrong codes; access is blocked until sharing is started again.": "رموز خاطئة كثيرة جدًا؛ تم حظر الوصول حتى تتم إعادة بدء المشاركة.",
+ "Too many wrong codes; wait a minute and try again.": "رموز خاطئة كثيرة جدًا؛ انتظر دقيقة ثم حاول مرة أخرى.",
  "Transport:": "النقل:",
  "Turkish F": "التركية F",
  "Turkish Q": "التركية Q",

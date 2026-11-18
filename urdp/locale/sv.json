@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Den här texten läggs till sist på kommandoraden ordagrant.",
  "This user is not allowed to use Remote Desktop.": "Den här användaren får inte använda Fjärrskrivbord.",
  "Too many wrong codes; access is blocked until sharing is started again.": "För många felaktiga koder; åtkomsten är blockerad tills delningen startas igen.",
+ "Too many wrong codes; wait a minute and try again.": "För många felaktiga koder; vänta en minut och försök igen.",
  "Transport:": "Transport:",
  "Turkish F": "Turkiska F",
  "Turkish Q": "Turkiska Q",

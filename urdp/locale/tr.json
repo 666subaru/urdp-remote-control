@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Buradaki metin komut satırının sonuna olduğu gibi eklenir.",
  "This user is not allowed to use Remote Desktop.": "Bu kullanıcının uzak masaüstü izni yok.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Çok fazla yanlış kod girildi; paylaşım yeniden başlatılana kadar erişim engellendi.",
+ "Too many wrong codes; wait a minute and try again.": "Çok fazla yanlış kod girildi; bir dakika bekleyip yeniden deneyin.",
  "Transport:": "Aktarım:",
  "Turkish F": "Türkçe F",
  "Turkish Q": "Türkçe Q",

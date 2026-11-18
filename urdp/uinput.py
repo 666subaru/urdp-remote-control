@@ -54,6 +54,12 @@ def _ui_get_sysname(length: int) -> int:
 SPAN = 32767            # coordinate range of every absolute axis
 RESOLUTION = 100        # units per mm; libinput wants one for tablets
 SLOTS = 10
+#: The keys the keyboard has: what a PC keyboard sends, and nothing like
+#: power, sleep or the radio switch.  Matches the page's KEYS table, plus the
+#: few more keys a layout may need to type a character.
+KEYS = frozenset([*range(1, 84), 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+                  96, 97, 98, 99, 100, 102, 103, 104, 105, 106, 107, 108, 109,
+                  110, 111, 117, 119, 121, 122, 123, 124, 125, 126, 127])
 PRESSURE_MAX = 4095
 DEVICE = "/dev/uinput"
 
@@ -181,7 +187,7 @@ class TabletInput:
         self._scrolling = False
         self._scrolled = False
         self._scroll_rest = [0.0, 0.0]
-        self.keyboard = Device(f"{label} Keyboard", keys=range(1, 249))
+        self.keyboard = Device(f"{label} Keyboard", keys=sorted(KEYS))
         self._pressed: set[int] = set()
         self._keymap: dict[str, tuple[int, tuple[int, ...]]] = {}
         self._keymap_at = 0.0
@@ -299,6 +305,8 @@ class TabletInput:
     def _point(self, x: float, y: float) -> None:
         ax, ay, aw, ah = self._area
         dev = self.wheel
+        # Kept on the tablet screen: the device itself spans the desktop.
+        x, y = min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0)
         dev.emit(EV_ABS, ABS_X, _clamp((ax + x * aw) * SPAN, 0, SPAN))
         dev.emit(EV_ABS, ABS_Y, _clamp((ay + y * ah) * SPAN, 0, SPAN))
 
@@ -332,6 +340,8 @@ class TabletInput:
         Two fingers: drag scrolls, tap right-clicks."""
         fingers = self._fingers
         if phase == "down":
+            if ident in fingers or len(fingers) >= SLOTS:
+                return
             fingers[ident] = [x, y, x, y]
             if len(fingers) == 1:
                 self._scrolling = self._scrolled = False
@@ -385,7 +395,7 @@ class TabletInput:
     def key(self, code: int, down: bool) -> None:
         """A physical key of the tablet's keyboard, as an evdev code; the
         desktop's own layout decides what it types."""
-        if not 1 <= code <= 248 or (code in self._pressed) == down:
+        if code not in KEYS or (code in self._pressed) == down:
             return
         (self._pressed.add if down else self._pressed.discard)(code)
         self.keyboard.emit(EV_KEY, code, 1 if down else 0)
@@ -416,7 +426,7 @@ class TabletInput:
                 self._tap(keymap.KEY_ENTER)
             elif char == "\t":
                 self._tap(keymap.KEY_TAB)
-            elif char in self._keymap:
+            elif char in self._keymap and self._keymap[char][0] in KEYS:
                 self._tap(*self._keymap[char])
 
     def release_all(self) -> None:

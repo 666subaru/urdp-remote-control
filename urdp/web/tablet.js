@@ -3,6 +3,7 @@
 import RFB from './novnc/core/rfb.js';
 import { encodings } from './novnc/core/encodings.js';
 import { clientToElement } from './novnc/core/util/element.js';
+import { hex, hmac, pbkdf2, unseal } from './auth.js';
 
 // Ask the server to draw the cursor into the picture.  With the cursor
 // pseudo-encodings noVNC draws it itself, but only where the tablet is being
@@ -23,6 +24,13 @@ let timer = 0;
 let shownSize = '';
 let pageVersion = '';            // the page files this page was loaded from
 let inputSock = null;            // direct touch / pen channel, when offered
+let derived = { from: '', key: null };   // the key the code makes, kept
+
+function keyFor(salt, rounds) {
+  const from = [code, salt, rounds].join('\n');
+  if (derived.from !== from) derived = { from, key: pbkdf2(code, salt, rounds) };
+  return derived.key;
+}
 
 // The code arrives in the fragment of the address the QR code holds.  Keep it
 // and take it out of the address bar, so a screenshot does not show it.
@@ -78,24 +86,33 @@ async function connect() {
   if (rfb) return;
   status(text('connecting', 'Connecting…'));
   const [w, h, dpr] = screenSize();
-  let answer;
+  // The computer sends a challenge; the answer proves the code without
+  // sending it, and the VNC password comes back sealed with it.
+  let answer, challenge, key;
   try {
-    const query = new URLSearchParams({ k: code, w, h, dpr });
-    const reply = await fetch('hello?' + query, { cache: 'no-store' });
-    answer = await reply.json();
+    const reply = await fetch('nonce', { cache: 'no-store' });
+    challenge = await reply.json();
+    strings = challenge.strings || strings;
+    // URDP was updated while this page stayed open: load the new page.
+    if (challenge.version) {
+      if (pageVersion && challenge.version !== pageVersion) { location.reload(); return; }
+      pageVersion = challenge.version;
+    }
+    applyStrings();
+    if (!code) { askCode(false); return; }
+    key = keyFor(challenge.salt, challenge.rounds);
+    const p = hex(hmac(key, `hello:${challenge.nonce}`));
+    const query = new URLSearchParams({ n: challenge.nonce, p, w, h, dpr });
+    answer = await (await fetch('hello?' + query, { cache: 'no-store' })).json();
   } catch (e) {
     retryLater();
     return;
   }
-  strings = answer.strings || strings;
-  // URDP was updated while this page stayed open: load the new page.
-  if (answer.version) {
-    if (pageVersion && answer.version !== pageVersion) { location.reload(); return; }
-    pageVersion = answer.version;
-  }
-  applyStrings();
   if (!answer.ok) {
-    askCode(!!code);
+    askCode(true);
+    if (answer.reason === 'wait' || answer.reason === 'locked') {
+      status(text('wait', 'Too many wrong codes; wait a minute and try again.'));
+    }
     return;
   }
   $('codeform').hidden = true;
@@ -107,9 +124,10 @@ async function connect() {
   }
 
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${scheme}://${location.host}/ws?k=${encodeURIComponent(code)}`;
+  const ticket = encodeURIComponent(answer.ticket);
+  const url = `${scheme}://${location.host}/ws?t=${ticket}`;
   rfb = new RFB($('screen'), url, {
-    credentials: { password: answer.password },
+    credentials: { password: unseal(key, challenge.nonce, answer.password) },
     shared: true,
     wsProtocols: ['binary'],
   });
@@ -120,7 +138,7 @@ async function connect() {
   rfb.focusOnClick = false;
   rfb.addEventListener('connect', () => {
     failures = 0;
-    if (answer.input) openInput();
+    if (answer.input) openInput(ticket);
     document.body.classList.add('live');
     status(text('connected', 'Connected'));
     updateChrome();
@@ -139,9 +157,9 @@ async function connect() {
 // it as they are: a real touchscreen and a real pen there, tied to this
 // screen.  KDE then does the gestures, scrolling and right-clicks itself,
 // and the pen keeps its pressure, tilt, hover and eraser.
-function openInput() {
+function openInput(ticket) {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(`${scheme}://${location.host}/input?k=${encodeURIComponent(code)}`);
+  const sock = new WebSocket(`${scheme}://${location.host}/input?t=${ticket}`);
   sock.addEventListener('open', () => { inputSock = sock; updateChrome(); });
   sock.addEventListener('close', () => { if (inputSock === sock) inputSock = null; });
   sock.addEventListener('error', () => sock.close());

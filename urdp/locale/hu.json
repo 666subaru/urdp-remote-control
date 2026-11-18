@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Ez a szöveg szó szerint a parancssor végére kerül.",
  "This user is not allowed to use Remote Desktop.": "Ez a felhasználó nem használhatja a Távoli asztalt.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Túl sok hibás kód; a hozzáférés a megosztás újraindításáig tiltva van.",
+ "Too many wrong codes; wait a minute and try again.": "Túl sok hibás kód; várjon egy percet, és próbálja újra.",
  "Transport:": "Átvitel:",
  "Turkish F": "Török F",
  "Turkish Q": "Török Q",

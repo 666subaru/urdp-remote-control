@@ -169,25 +169,32 @@ class WebSocketTest(unittest.TestCase):
 
 
 class _Owner:
-    """Stands in for TabletScreen: the code is "goodcode00", VNC is local."""
+    """Stands in for TabletScreen, with its real challenge, wrong-code and
+    ticket logic: the code is "goodcode00", VNC is local."""
+
+    key = tablet.TabletScreen.key
+    new_nonce = tablet.TabletScreen.new_nonce
+    check_proof = tablet.TabletScreen.check_proof
+    new_ticket = tablet.TabletScreen.new_ticket
+    use_ticket = tablet.TabletScreen.use_ticket
 
     def __init__(self, vnc_port):
         self.vnc_port = vnc_port
         self.vnc_password = "pw123456"
+        self.settings = tablet.Settings(code="goodcode00")
+        self.salt = "0011223344556677"
+        self._key = None
+        self._lock = threading.Lock()
+        self._bad_codes = 0
+        self._bad_from = {}
+        self._nonces = {}
+        self._tickets = {}
+        self._locked = unittest.mock.Mock()
         self.seen = []
         self.clients = []
-        self.bad = 0
         self.has_input = True
         self.messages = []
         self.inputs = []
-
-    def check_code(self, given):
-        if self.bad >= 3:
-            return None
-        if given == "goodcode00":
-            return True
-        self.bad += 1
-        return False
 
     def tablet_seen(self, w, h, ratio):
         self.seen.append((w, h, ratio))
@@ -233,15 +240,28 @@ class ServerTest(unittest.TestCase):
         self.server.server_close()
         self.vnc.close()
 
-    def get(self, path):
-        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}") as r:
+    def get(self, path, headers=None):
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
+                                         headers=headers or {})
+        with urllib.request.urlopen(request) as r:
             return r.status, r.headers, r.read()
+
+    def hello(self, code="goodcode00", extra="", nonce=None):
+        """The page's side of the challenge; returns (answer, key, nonce)."""
+        challenge = json.loads(self.get("/nonce")[2])
+        nonce = nonce or challenge["nonce"]
+        key = tablet.derive_key(code, challenge["salt"])
+        proof = tablet.proof(key, "hello", nonce).hex()
+        _, _, body = self.get(f"/hello?n={nonce}&p={proof}{extra}")
+        return json.loads(body), key, nonce
 
     def test_page_and_novnc_are_served_with_a_policy(self):
         status, headers, body = self.get("/")
         self.assertEqual(status, 200)
         self.assertIn(b"tablet.js", body)
-        self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
+        policy = headers["Content-Security-Policy"]
+        self.assertIn("default-src 'self'", policy)
+        self.assertIn("connect-src 'self';", policy)
         status, _, body = self.get("/novnc/core/rfb.js")
         self.assertIn(b"export default class RFB", body)
         status, headers, body = self.get("/keepawake.mp4")
@@ -254,31 +274,86 @@ class ServerTest(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as cm:
                 self.get(path)
             self.assertEqual(cm.exception.code, 404)
+        with socket.create_connection(("127.0.0.1", self.port), 5) as sock:
+            sock.sendall(b"GET /a\0.js HTTP/1.1\r\nHost: x\r\n\r\n")
+            self.assertIn(b" 404 ", sock.recv(64))
 
-    def test_hello_needs_the_code(self):
-        _, _, body = self.get("/hello?k=wrong")
-        answer = json.loads(body)
-        self.assertFalse(answer["ok"])
+    def test_hello_proves_the_code_without_sending_it(self):
+        challenge = json.loads(self.get("/nonce")[2])
+        self.assertEqual(challenge["rounds"], tablet.KEY_ROUNDS)
+        self.assertIn("connecting", challenge["strings"])
+        answer, _, _ = self.hello("badcode000")
+        self.assertEqual((answer["ok"], answer["reason"]), (False, "code"))
         self.assertNotIn("password", answer)
-        self.assertIn("connecting", answer["strings"])
-        _, _, body = self.get("/hello?k=goodcode00&w=1480&h=924&dpr=2")
-        answer = json.loads(body)
+        self.assertNotIn("ticket", answer)
+        answer, key, nonce = self.hello(extra="&w=1480&h=924&dpr=2")
         self.assertTrue(answer["ok"])
-        self.assertEqual(answer["password"], "pw123456")
+        # The password is sealed: only the code's key opens it.
+        self.assertNotIn("pw123456", json.dumps(answer))
+        opened = bytes.fromhex(answer["password"])
+        pad = tablet.proof(key, "vnc", nonce)
+        self.assertEqual(bytes(a ^ b for a, b in zip(opened, pad)), b"pw123456")
         self.assertEqual(self.owner.seen, [(1480.0, 924.0, 2.0)])
+        self.assertTrue(answer["ticket"])
 
-    def test_lockout(self):
-        for _ in range(3):
-            self.get("/hello?k=nope")
-        _, _, body = self.get("/hello?k=goodcode00")
-        self.assertEqual(json.loads(body)["reason"], "locked")
+    def test_a_challenge_answers_once(self):
+        answer, _, nonce = self.hello()
+        self.assertTrue(answer["ok"])
+        answer, _, _ = self.hello(nonce=nonce)
+        self.assertFalse(answer["ok"])
+        answer, _, _ = self.hello(nonce="00" * 16)     # never handed out
+        self.assertFalse(answer["ok"])
+        self.assertEqual(self.owner._bad_codes, 0)     # not guesses
 
-    def _handshake(self, code, path="/ws"):
+    def test_an_address_that_guesses_waits(self):
+        _, _, body = self.get("/hello?n=x&p=")
+        self.assertEqual(self.owner._bad_codes, 0)     # no answer, no guess
+        for _ in range(tablet.IP_TRIES):
+            self.assertEqual(self.hello("badcode000")[0]["reason"], "code")
+        self.assertEqual(self.hello()[0]["reason"], "wait")
+        self.owner._bad_from["127.0.0.1"] = (tablet.IP_TRIES, 0.0)
+        self.assertTrue(self.hello()[0]["ok"])         # its wait is over
+        self.assertNotIn("127.0.0.1", self.owner._bad_from)
+
+    def test_lockout_after_many_wrong_answers(self):
+        self.owner._bad_codes = tablet.MAX_BAD_CODES - 1
+        self.assertEqual(self.hello("badcode000")[0]["reason"], "code")
+        self.owner._locked.emit.assert_called_once()
+        self.assertEqual(self.hello()[0]["reason"], "locked")
+
+    def test_other_sites_are_turned_away(self):
+        for headers in ({"Sec-Fetch-Site": "cross-site"},
+                        {"Origin": "http://evil.example"}):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self.get("/hello?n=x&p=00", headers)
+            self.assertEqual(cm.exception.code, 403)
+        self.assertEqual(self.owner._bad_codes, 0)
+        status, _, _ = self.get("/nonce", {"Sec-Fetch-Site": "same-origin",
+                                            "Origin": f"http://127.0.0.1:{self.port}"})
+        self.assertEqual(status, 200)
+
+    def test_tickets_are_for_one_address_and_one_use(self):
+        ticket = self.owner.new_ticket("10.0.0.5")
+        self.assertFalse(self.owner.use_ticket(ticket, "ws", "10.0.0.6"))
+        self.assertTrue(self.owner.use_ticket(ticket, "ws", "10.0.0.5"))
+        self.assertFalse(self.owner.use_ticket(ticket, "ws", "10.0.0.5"))
+        self.assertTrue(self.owner.use_ticket(ticket, "input", "10.0.0.5"))
+        self.assertFalse(self.owner.use_ticket("made-up", "ws", "10.0.0.5"))
+
+    def test_idle_connections_time_out(self):
+        self.assertEqual(tablet._Handler.timeout, 15)
+        self.assertEqual(self.server._slots._value, tablet.MAX_CONNECTIONS)
+
+    def _ticket(self):
+        return self.hello()[0]["ticket"]
+
+    def _handshake(self, ticket, path="/ws", origin=None):
         sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
         key = base64.b64encode(os.urandom(16)).decode()
-        sock.sendall((f"GET {path}?k={code} HTTP/1.1\r\nHost: x\r\n"
+        extra = f"Origin: {origin}\r\n" if origin else ""
+        sock.sendall((f"GET {path}?t={ticket} HTTP/1.1\r\nHost: x\r\n"
                       "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-                      f"Sec-WebSocket-Key: {key}\r\n"
+                      f"Sec-WebSocket-Key: {key}\r\n{extra}"
                       "Sec-WebSocket-Protocol: binary\r\n"
                       "Sec-WebSocket-Version: 13\r\n\r\n").encode())
         head = b""
@@ -286,13 +361,20 @@ class ServerTest(unittest.TestCase):
             head += sock.recv(1)
         return sock, key, head.decode()
 
-    def test_websocket_refuses_a_wrong_code(self):
+    def test_websocket_refuses_without_a_ticket(self):
         sock, _, head = self._handshake("wrong")
         sock.close()
         self.assertIn(" 403 ", head.splitlines()[0])
 
+    def test_websocket_refuses_another_origin(self):
+        sock, _, head = self._handshake(self._ticket(),
+                                        origin="http://evil.example")
+        sock.close()
+        self.assertIn(" 403 ", head.splitlines()[0])
+
     def test_websocket_bridges_to_vnc(self):
-        sock, key, head = self._handshake("goodcode00")
+        ticket = self._ticket()
+        sock, key, head = self._handshake(ticket, origin="http://x")
         self.assertIn(" 101 ", head.splitlines()[0])
         self.assertIn(tablet._accept_key(key), head)
         self.assertIn("Sec-WebSocket-Protocol: binary", head)
@@ -308,10 +390,12 @@ class ServerTest(unittest.TestCase):
         sock.sendall(bytes([0x88, 0x80]) + mask)      # close
         sock.close()
         self.assertEqual(self.owner.clients[0], "127.0.0.1")
-
+        again, _, head = self._handshake(ticket)      # used up
+        again.close()
+        self.assertIn(" 403 ", head.splitlines()[0])
 
     def test_input_channel_delivers_messages(self):
-        sock, _, head = self._handshake("goodcode00", "/input")
+        sock, _, head = self._handshake(self._ticket(), "/input")
         self.assertIn(" 101 ", head.splitlines()[0])
         mask = b"\x01\x02\x03\x04"
         for text in (b'["t","d",1,0.5,0.5]', b'["p","h",0.1,0.2,0,0,0,0,0]'):
@@ -328,7 +412,7 @@ class ServerTest(unittest.TestCase):
                          [b'["t","d",1,0.5,0.5]', b'["p","h",0.1,0.2,0,0,0,0,0]'])
         self.assertEqual(self.owner.inputs, ["open", "closed"])
 
-    def test_input_channel_needs_the_code(self):
+    def test_input_channel_needs_a_ticket(self):
         sock, _, head = self._handshake("wrong", "/input")
         sock.close()
         self.assertIn(" 403 ", head.splitlines()[0])
@@ -382,6 +466,18 @@ class InputMessageTest(unittest.TestCase):
             ("scroll", 0.0, -50.0)])
         screen.input_closed(None)
         self.assertEqual(fake.calls[-1], ("release",))
+
+    def test_hostile_messages_are_dropped_quietly(self):
+        from PyQt6.QtCore import QCoreApplication
+        _app = QCoreApplication.instance() or QCoreApplication([])
+        screen = tablet.TabletScreen()
+        fake = _FakeInput()
+        screen._input = fake
+        for payload in (b'["t","d",1,Infinity,0]', b'["w",1e999,0]',
+                        b'["p","h",NaN,0,0,0,0,0,0]',
+                        b"[" * 100000 + b"]" * 100000):
+            screen.input_message(payload)
+        self.assertEqual(fake.calls, [])
 
 
 class UinputTest(unittest.TestCase):
@@ -460,6 +556,16 @@ class MouseModeTest(unittest.TestCase):
         u = self.u
         return [(c, v) for f in self.events for k, c, v in f
                 if k == u.EV_KEY]
+
+    def test_mouse_stays_on_the_tablet_screen(self):
+        self.dev.pen_as_mouse("hover", -3.0, 0.5, False)
+        x = [v for k, c, v in self.events[0] if c == self.u.ABS_X][0]
+        self.assertEqual(x, round(0.5 * self.u.SPAN))     # its left edge
+
+    def test_fingers_are_limited(self):
+        for ident in range(1000):
+            self.dev.touch_as_mouse("down", ident, 0.5, 0.5)
+        self.assertEqual(len(self.dev._fingers), self.u.SLOTS)
 
     def test_area_maps_to_the_desktop(self):
         self.dev.pen_as_mouse("hover", 0.5, 0.5, False)
@@ -544,6 +650,8 @@ class KeyboardTest(unittest.TestCase):
         board.key(29, True)
         board.key(29, True)
         board.key(999, True)
+        for code in (116, 142, 205, 247):         # power, sleep, suspend, radio
+            board.key(code, True)
         board._slots = {}
         board.pen = type("P", (), {"emit": lambda *a: None,
                                    "sync": lambda *a: None})()

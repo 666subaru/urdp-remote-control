@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "ข้อความนี้จะถูกต่อท้ายบรรทัดคำสั่งตามที่พิมพ์ไว้ทุกประการ",
  "This user is not allowed to use Remote Desktop.": "ผู้ใช้รายนี้ไม่ได้รับอนุญาตให้ใช้เดสก์ท็อประยะไกล",
  "Too many wrong codes; access is blocked until sharing is started again.": "ป้อนรหัสผิดมากเกินไป การเข้าถึงถูกบล็อกจนกว่าจะเริ่มการแชร์ใหม่",
+ "Too many wrong codes; wait a minute and try again.": "ใส่รหัสผิดหลายครั้งเกินไป โปรดรอหนึ่งนาทีแล้วลองอีกครั้ง",
  "Transport:": "การขนส่งข้อมูล:",
  "Turkish F": "ตุรกี F",
  "Turkish Q": "ตุรกี Q",

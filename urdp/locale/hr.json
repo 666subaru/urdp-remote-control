@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Ovaj se tekst doslovno dodaje na kraj naredbenog retka.",
  "This user is not allowed to use Remote Desktop.": "Ovom korisniku nije dopušteno koristiti udaljenu radnu površinu.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Previše pogrešnih kodova; pristup je blokiran dok se dijeljenje ponovno ne pokrene.",
+ "Too many wrong codes; wait a minute and try again.": "Previše pogrešnih kodova; pričekajte minutu i pokušajte ponovno.",
  "Transport:": "Prijenos:",
  "Turkish F": "Turski F",
  "Turkish Q": "Turski Q",

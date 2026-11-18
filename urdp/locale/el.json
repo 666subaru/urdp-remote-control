@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Αυτό το κείμενο προστίθεται αυτούσιο στο τέλος της γραμμής εντολών.",
  "This user is not allowed to use Remote Desktop.": "Αυτός ο χρήστης δεν επιτρέπεται να χρησιμοποιεί την απομακρυσμένη επιφάνεια εργασίας.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Πάρα πολλοί λάθος κωδικοί· η πρόσβαση αποκλείεται μέχρι να ξεκινήσει ξανά η κοινή χρήση.",
+ "Too many wrong codes; wait a minute and try again.": "Πάρα πολλοί λανθασμένοι κωδικοί· περιμένετε ένα λεπτό και δοκιμάστε ξανά.",
  "Transport:": "Μεταφορά:",
  "Turkish F": "Τουρκικό F",
  "Turkish Q": "Τουρκικό Q",

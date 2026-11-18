@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Tämä teksti lisätään komentorivin loppuun sellaisenaan.",
  "This user is not allowed to use Remote Desktop.": "Tällä käyttäjällä ei ole oikeutta käyttää Etätyöpöytää.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Liian monta väärää koodia; pääsy on estetty, kunnes jakaminen käynnistetään uudelleen.",
+ "Too many wrong codes; wait a minute and try again.": "Liian monta väärää koodia; odota minuutti ja yritä uudelleen.",
  "Transport:": "Siirtotapa:",
  "Turkish F": "Turkkilainen F",
  "Turkish Q": "Turkkilainen Q",

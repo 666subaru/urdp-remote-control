@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "See tekst lisatakse käsurea lõppu sõna-sõnalt.",
  "This user is not allowed to use Remote Desktop.": "Sellel kasutajal pole lubatud kaugtöölauda kasutada.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Liiga palju valesid koode; juurdepääs on blokeeritud, kuni jagamine uuesti käivitatakse.",
+ "Too many wrong codes; wait a minute and try again.": "Liiga palju valesid koode; oodake minut ja proovige uuesti.",
  "Transport:": "Transport:",
  "Turkish F": "Türgi F",
  "Turkish Q": "Türgi Q",

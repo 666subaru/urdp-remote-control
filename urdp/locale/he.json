@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "טקסט זה מצורף לשורת הפקודה כמות שהוא.",
  "This user is not allowed to use Remote Desktop.": "משתמש זה אינו רשאי להשתמש בשולחן עבודה מרוחק.",
  "Too many wrong codes; access is blocked until sharing is started again.": "יותר מדי קודים שגויים; הגישה חסומה עד שהשיתוף יופעל מחדש.",
+ "Too many wrong codes; wait a minute and try again.": "יותר מדי קודים שגויים; המתינו דקה ונסו שוב.",
  "Transport:": "תעבורה:",
  "Turkish F": "טורקית F",
  "Turkish Q": "טורקית Q",

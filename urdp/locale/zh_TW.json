@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "此文字會原樣附加到命令列末端。",
  "This user is not allowed to use Remote Desktop.": "此使用者無權使用遠端桌面。",
  "Too many wrong codes; access is blocked until sharing is started again.": "錯誤代碼過多；在重新開始分享之前已封鎖存取。",
+ "Too many wrong codes; wait a minute and try again.": "錯誤代碼過多；請等候一分鐘後再試。",
  "Transport:": "傳輸方式：",
  "Turkish F": "土耳其文 F",
  "Turkish Q": "土耳其文 Q",

@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Đoạn văn bản này được nối nguyên văn vào cuối dòng lệnh.",
  "This user is not allowed to use Remote Desktop.": "Người dùng này không được phép dùng Máy tính từ xa.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Nhập sai mã quá nhiều lần; quyền truy cập bị chặn cho đến khi chia sẻ được bắt đầu lại.",
+ "Too many wrong codes; wait a minute and try again.": "Nhập sai mã quá nhiều lần; hãy đợi một phút rồi thử lại.",
  "Transport:": "Phương thức truyền:",
  "Turkish F": "Thổ Nhĩ Kỳ F",
  "Turkish Q": "Thổ Nhĩ Kỳ Q",

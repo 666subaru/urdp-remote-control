@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Этот текст добавляется в конец командной строки без изменений.",
  "This user is not allowed to use Remote Desktop.": "Этому пользователю не разрешено использовать удалённый рабочий стол.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Слишком много неверных кодов; доступ заблокирован до повторного запуска общего доступа.",
+ "Too many wrong codes; wait a minute and try again.": "Слишком много неверных кодов; подождите минуту и попробуйте снова.",
  "Transport:": "Транспорт:",
  "Turkish F": "Турецкая F",
  "Turkish Q": "Турецкая Q",

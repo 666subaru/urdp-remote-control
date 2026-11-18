@@ -189,11 +189,21 @@ gereken **tek bir port** vardır (varsayılan 1701).
   uinput olmadan tablet yalnızca görüntü gösterir.
 - **Ekran açık kalır.** Sayfa görüntünün arkasında küçük, sessiz bir video
   oynatır; Android ekranı karartmaz (Wake Lock API HTTPS ister).
-- **Erişim.** noVNC dosyaları dışında her şey kod ister. Kod adresin `#`
+- **Erişim.** Sayfa dosyaları dışında her şey kod ister. Kod adresin `#`
   kısmında taşınır (sunucuya ve Referer'a gitmez), sonra tablet tarayıcısında
-  saklanır. 20 yanlış koddan sonra paylaşım yeniden başlatılana kadar erişim
-  kapanır. **Yeni Kod** herkesin bağlantısını keser. Bağlantı düz HTTP'dir; ev
-  ya da ofis ağı içindir.
+  saklanır. Kodun kendisi ağdan hiç geçmez: sayfa tek kullanımlık bir soruyu
+  koddan türetilen bir anahtarla (PBKDF2) yanıtlar, bir dakikalık bir bilet
+  alır ve VNC parolasını o anahtarla mühürlenmiş olarak alır. 5 yanlış yanıt
+  veren adres bir dakika bekler; toplam 200 yanlıştan sonra paylaşım yeniden
+  başlatılana kadar erişim kapanır. **Yeni Kod** herkesin bağlantısını keser
+  ve VNC sunucusuna yeni parola verir.
+- **Kodu bilen bu oturumu yönetir.** Klavye, terminaller dahil her pencereye
+  ulaşır; bilgisayara takılı bir klavye gibidir. Bağlantı düz HTTP'dir: kod
+  gizli kalır, ama ağı izleyebilen ekranı görür, trafiği değiştirebilen
+  oturumu ele geçirebilir. Güvendiğiniz ev ya da ofis ağında veya Tailscale
+  gibi bir VPN üzerinden kullanın. Bu bilgisayarın diğer kullanıcıları VNC
+  parolasını süreç listesinden okuyabilir (`krfb-virtualmonitor` onu yalnız
+  argüman olarak alır) ve ekranı görebilir, yönetemez.
 - **Güvenlik duvarı.** Etkinse portu yerel ağa açın, örneğin
   `sudo ufw allow from 192.168.1.0/24 to any port 1701 proto tcp`.
 - **VPN.** Yerel ağın yolunu üstlenen bir VPN (örneğin kendi ağınızın alt ağ

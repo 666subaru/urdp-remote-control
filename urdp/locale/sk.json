@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Tento text sa doslovne pripojí na koniec príkazového riadka.",
  "This user is not allowed to use Remote Desktop.": "Tento používateľ nesmie používať vzdialenú plochu.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Príliš veľa nesprávnych kódov; prístup je zablokovaný, kým sa zdieľanie znova nespustí.",
+ "Too many wrong codes; wait a minute and try again.": "Príliš veľa nesprávnych kódov; počkajte minútu a skúste to znova.",
  "Transport:": "Prenos:",
  "Turkish F": "Turecké F",
  "Turkish Q": "Turecké Q",

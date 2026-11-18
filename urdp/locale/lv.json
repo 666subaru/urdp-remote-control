@@ -265,6 +265,7 @@
  "This text is appended to the command line verbatim.": "Šis teksts tiek burtiski pievienots komandrindas beigās.",
  "This user is not allowed to use Remote Desktop.": "Šim lietotājam nav atļauts izmantot attālo darbvirsmu.",
  "Too many wrong codes; access is blocked until sharing is started again.": "Pārāk daudz nepareizu kodu; piekļuve ir bloķēta, līdz koplietošana tiks sākta no jauna.",
+ "Too many wrong codes; wait a minute and try again.": "Pārāk daudz nepareizu kodu; uzgaidiet minūti un mēģiniet vēlreiz.",
  "Transport:": "Transports:",
  "Turkish F": "Turku F",
  "Turkish Q": "Turku Q",
