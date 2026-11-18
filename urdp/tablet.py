@@ -374,16 +374,27 @@ def supported() -> str:
     return ""
 
 
+def _read_page() -> dict[str, bytes]:
+    page = {}
+    for name in ("tablet.html", "tablet.js", "tablet.css", "auth.js"):
+        try:
+            page["/" + name] = (WEB_ROOT / name).read_bytes()
+        except OSError:
+            pass
+    return page
+
+
+#: The page's own files as this URDP started with them.  Served from here,
+#: so an update on disk while URDP runs cannot pair a new page with this
+#: server (the page would speak a protocol the server does not know).
+_PAGE = _read_page()
+_VERSION = hashlib.sha256(b"".join(_PAGE.values())).hexdigest()[:12]
+
+
 def page_version() -> str:
     """Changes whenever the page's own files change, so an open page that
     reconnects to a newer URDP reloads itself instead of running old code."""
-    digest = hashlib.sha256()
-    for name in ("tablet.html", "tablet.js", "tablet.css", "auth.js"):
-        try:
-            digest.update((WEB_ROOT / name).read_bytes())
-        except OSError:
-            pass
-    return digest.hexdigest()[:12]
+    return _VERSION
 
 
 def page_strings() -> dict[str, str]:
@@ -578,6 +589,9 @@ class _Handler(BaseHTTPRequestHandler):
         return True
 
     def _static(self, path: str) -> None:
+        if path in _PAGE:
+            self._send(200, _PAGE[path], _STATIC_TYPES[Path(path).suffix])
+            return
         root = WEB_ROOT.resolve()
         try:
             target = (root / path.lstrip("/")).resolve()
