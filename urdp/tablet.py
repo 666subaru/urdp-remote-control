@@ -841,9 +841,7 @@ class TabletScreen(QObject):
         threading.Thread(target=self._server.serve_forever,
                          daemon=True).start()
         self._open_input()
-        if self.settings.sound == "tablet":
-            speaker = tabletaudio.Speaker(self._audio_out)
-            self._speaker = speaker if speaker.start() else None
+        self._open_audio()
         self._set_state("starting")
         s = self.settings
         self._start_monitor(geometry(s.size, s.tablet_width, s.tablet_height,
@@ -978,6 +976,29 @@ class TabletScreen(QObject):
     @property
     def has_audio(self) -> bool:
         return self._speaker is not None
+
+    def _open_audio(self) -> None:
+        if self.settings.sound == "tablet" and self._speaker is None:
+            speaker = tabletaudio.Speaker(self._audio_out)
+            self._speaker = speaker if speaker.start() else None
+
+    def set_sound(self, sound: str) -> None:
+        """Move the sound while sharing runs.  An open page learns about
+        sound only when it connects, so the screen reconnects (a blink)."""
+        if sound == self.settings.sound:
+            return
+        self.settings.sound = sound
+        save_settings(self.settings)
+        if not self.running:
+            return
+        if sound == "tablet":
+            self._open_audio()
+            with self._lock:
+                bridges, self._bridges = self._bridges, []
+            for bridge in bridges:
+                bridge.close()
+        else:
+            self._close_audio()
 
     def _close_audio(self) -> None:
         with self._lock:

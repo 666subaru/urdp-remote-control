@@ -498,6 +498,42 @@ class SpeakerTest(unittest.TestCase):
         self.assertEqual(got, [sound])
 
 
+class SoundSwitchTest(unittest.TestCase):
+    def test_sound_moves_while_sharing(self):
+        from PyQt6.QtCore import QCoreApplication
+        from urdp import tabletaudio
+        _app = QCoreApplication.instance() or QCoreApplication([])
+        started, stopped = [], []
+
+        class FakeSpeaker:
+            def __init__(self, listener):
+                pass
+
+            def start(self):
+                started.append(1)
+                return True
+
+            def stop(self):
+                stopped.append(1)
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
+                unittest.mock.patch.object(tabletaudio, "Speaker", FakeSpeaker):
+            screen = tablet.TabletScreen()
+            screen.settings.sound = "computer"
+            screen._server = object()                    # "running"
+            bridge = unittest.mock.Mock()
+            screen._bridges = [bridge]
+            screen.set_sound("tablet")
+            self.assertTrue(screen.has_audio)
+            bridge.close.assert_called_once()            # page reconnects
+            self.assertEqual(tablet.load_settings().sound, "tablet")
+            screen.set_sound("computer")
+            self.assertFalse(screen.has_audio)
+            self.assertEqual((started, stopped), ([1], [1]))
+            screen._server = None
+
+
 class _FakeInput:
     def __init__(self):
         self.calls = []

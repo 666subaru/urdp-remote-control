@@ -121,7 +121,8 @@ class TabletDialog(QDialog):
         self.position_box.currentIndexChanged.connect(self._save)
         self.size_box.currentIndexChanged.connect(self._save)
         self.input_box.currentIndexChanged.connect(self._save)
-        self.sound_box.currentIndexChanged.connect(self._save)
+        self.sound_box.currentIndexChanged.connect(
+            lambda: self.screen_.set_sound(self.sound_box.currentData()))
         self.port_box.valueChanged.connect(self._save)
         self.btn_copy.clicked.connect(self._copy)
         self.btn_code.clicked.connect(self._new_code)
@@ -145,7 +146,6 @@ class TabletDialog(QDialog):
         s.position = self.position_box.currentData()
         s.size = self.size_box.currentData()
         s.input = self.input_box.currentData()
-        s.sound = self.sound_box.currentData()
         s.port = self.port_box.value()
         tablet.save_settings(s)
         self._show_address()
@@ -193,8 +193,7 @@ class TabletDialog(QDialog):
     def _show_state(self, state: str, detail: str) -> None:
         running = self.screen_.running
         self.btn_start.setText(_("Stop") if running else _("Start"))
-        for widget in (self.position_box, self.size_box, self.sound_box,
-                       self.port_box):
+        for widget in (self.position_box, self.size_box, self.port_box):
             widget.setEnabled(not running)
         # The code is only worth scanning while something answers it.
         for widget in (self.code_image, self.address, self.btn_copy):
