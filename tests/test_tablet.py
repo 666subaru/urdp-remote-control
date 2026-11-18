@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -183,6 +184,9 @@ class _Owner:
     video_opened = tablet.TabletScreen.video_opened
     video_closed = tablet.TabletScreen.video_closed
     _video_out = tablet.TabletScreen._video_out
+    mic_opened = tablet.TabletScreen.mic_opened
+    mic_closed = tablet.TabletScreen.mic_closed
+    mic_in = tablet.TabletScreen.mic_in
 
     def __init__(self, vnc_port):
         self.vnc_port = vnc_port
@@ -203,6 +207,10 @@ class _Owner:
         self._audio = None
         self.has_video = True
         self._video = None
+        self.heard = []
+        self._mic = unittest.mock.Mock(write=self.heard.append)
+        self._mic_bridge = None
+        self.has_mic = True
         self._video_ready = True
         self._last_frame = b""
         self._epoch = 1
@@ -497,6 +505,47 @@ class ServerTest(unittest.TestCase):
         sock.close()
         self.assertIn(" 503 ", head.splitlines()[0])
 
+    def test_mic_channel_takes_the_sound(self):
+        sock, _, head = self._handshake(self._ticket(), "/mic")
+        self.assertIn(" 101 ", head.splitlines()[0])
+        mask = b"\x05\x06\x07\x08"
+        piece = bytes(range(200)) * 4 + bytes(160)      # 960 bytes: 10 ms
+        sock.sendall(bytes([0x82, 0xFE]) + struct.pack("!H", len(piece))
+                     + mask + tablet._unmask(piece, mask))
+        for _ in range(100):
+            if self.owner.heard:
+                break
+            threading.Event().wait(0.02)
+        self.assertEqual(self.owner.heard, [piece])
+        sock.sendall(bytes([0x88, 0x80]) + mask)
+        sock.recv(16)
+        sock.close()
+        for _ in range(100):
+            if self.owner._mic_bridge is None:
+                break
+            threading.Event().wait(0.02)
+        self.assertIsNone(self.owner._mic_bridge)
+
+    def test_mic_needs_a_ticket_and_the_microphone(self):
+        sock, _, head = self._handshake("wrong", "/mic")
+        sock.close()
+        self.assertIn(" 403 ", head.splitlines()[0])
+        self.owner.has_mic = False
+        sock, _, head = self._handshake(self._ticket(), "/mic")
+        sock.close()
+        self.assertIn(" 503 ", head.splitlines()[0])
+
+    def test_only_the_newest_mic_is_heard(self):
+        old, new = unittest.mock.Mock(), unittest.mock.Mock()
+        self.assertTrue(self.owner.mic_opened(old, 1))
+        self.assertTrue(self.owner.mic_opened(new, 1))
+        old.close.assert_called_once()
+        self.owner.mic_in(old, b"ab")
+        self.owner.mic_in(new, b"cd")
+        self.assertEqual(self.owner.heard, [b"cd"])
+        self.owner._epoch = 2
+        self.assertFalse(self.owner.mic_opened(old, 1))
+
     def test_input_channel_needs_a_ticket(self):
         sock, _, head = self._handshake("wrong", "/input")
         sock.close()
@@ -553,7 +602,8 @@ class VideoTest(unittest.TestCase):
 class VideoStateTest(unittest.TestCase):
     def _screen(self, tmp):
         from PyQt6.QtCore import QCoreApplication
-        _app = QCoreApplication.instance() or QCoreApplication([])
+        # Kept: once the application goes, so do the objects made in it.
+        self.app = QCoreApplication.instance() or QCoreApplication([])
         return tablet.TabletScreen()
 
     def test_wrong_screen_forgets_the_choice(self):
@@ -573,17 +623,180 @@ class VideoStateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 unittest.mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}):
             screen = self._screen(tmp)
-            channels = [unittest.mock.Mock() for _ in range(4)]
+            channels = [unittest.mock.Mock() for _ in range(5)]
             screen._bridges = [channels[0]]
             screen._input_bridge = channels[1]
             screen._audio = (channels[2], None)
             screen._video = (channels[3], None)
+            screen._mic_bridge = channels[4]
             epoch = screen._epoch
             screen.new_code()
             for channel in channels:
                 channel.close.assert_called()
-            self.assertEqual((screen._audio, screen._video), (None, None))
+            self.assertEqual((screen._audio, screen._video,
+                              screen._mic_bridge), (None, None, None))
             self.assertEqual(screen._epoch, epoch + 1)
+
+
+@unittest.skipUnless(shutil.which("openssl"), "needs openssl")
+class TlsTest(unittest.TestCase):
+    """The page over HTTPS: the same server, behind tablettls."""
+
+    def setUp(self):
+        from urdp import tablettls
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = unittest.mock.patch.dict(os.environ,
+                                            {"XDG_CONFIG_HOME": self.tmp.name})
+        self.env.start()
+        self.made = tablettls.context()
+        self.assertIsNotNone(self.made)
+        self.owner = _Owner(0)
+        self.server = tablet._WebServer(0, self.owner, self.made)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.client = ssl.create_default_context()
+        self.client.check_hostname = False
+        self.client.verify_mode = ssl.CERT_NONE
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_certificate_is_kept_and_its_key_private(self):
+        from urdp import tablettls
+        folder = Path(self.tmp.name) / "urdp" / "tablet-tls"
+        self.assertEqual((folder / "key.pem").stat().st_mode & 0o777, 0o600)
+        first = tablettls.fingerprint()
+        self.assertEqual(len(first.split(":")), 32)
+        self.assertIsNotNone(tablettls.context())
+        self.assertEqual(tablettls.fingerprint(), first)    # not made again
+
+    def test_page_comes_over_https(self):
+        request = urllib.request.Request(f"https://127.0.0.1:{self.port}/")
+        with urllib.request.urlopen(request, context=self.client) as r:
+            self.assertEqual(r.status, 200)
+            self.assertIn(b"tablet.js", r.read())
+
+    def test_plain_http_is_sent_on(self):
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        sock.sendall(b"GET /?x=1 HTTP/1.1\r\nHost: 10.0.0.9:1701\r\n\r\n")
+        head = b""
+        while b"\r\n\r\n" not in head:
+            head += sock.recv(1)
+        sock.close()
+        self.assertIn(b" 301 ", head)
+        self.assertIn(b"Location: https://10.0.0.9:1701/?x=1\r\n", head)
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        sock.sendall(b"GET / HTTP/1.1\r\nHost: a\"b\r\n\r\n")
+        self.assertIn(b" 400 ", sock.recv(100))
+        sock.close()
+
+    def test_websocket_through_tls_both_ways(self):
+        """Large frames out while the page talks: the pump must not stall
+        or mix them up."""
+        with urllib.request.urlopen(
+                f"https://127.0.0.1:{self.port}/nonce",
+                context=self.client) as r:
+            challenge = json.loads(r.read())
+        key = tablet.derive_key("goodcode00", challenge["salt"])
+        proof = tablet.proof(key, "hello", challenge["nonce"]).hex()
+        with urllib.request.urlopen(
+                f"https://127.0.0.1:{self.port}/hello?n={challenge['nonce']}"
+                f"&p={proof}", context=self.client) as r:
+            ticket = json.loads(r.read())["ticket"]
+        raw = socket.create_connection(("127.0.0.1", self.port), timeout=10)
+        sock = self.client.wrap_socket(raw)
+        sock.sendall((f"GET /video?t={ticket} HTTP/1.1\r\nHost: x\r\n"
+                      "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                      "Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            head += sock.recv(1)
+        self.assertIn(b" 101 ", head)
+        frames = [os.urandom(700_000) for _ in range(3)]
+        got = []
+
+        def read_exact(n):
+            data = b""
+            while len(data) < n:
+                data += sock.recv(n - len(data))
+            return data
+
+        for frame in frames:
+            self.owner._video_out(frame)
+            mask = b"\x09\x08\x07\x06"
+            sock.sendall(bytes([0x89, 0x84]) + mask                  # ping
+                         + tablet._unmask(b"ping", mask))
+            while True:
+                first, length = read_exact(2)
+                if length == 127:
+                    length = struct.unpack("!Q", read_exact(8))[0]
+                elif length == 126:
+                    length = struct.unpack("!H", read_exact(2))[0]
+                data = read_exact(length)
+                if first == 0x82:
+                    got.append(data)
+                    break
+                self.assertEqual((first, data), (0x8A, b"ping"))    # pong
+        self.assertEqual(got, frames)
+        sock.close()
+
+
+class MicrophoneTest(unittest.TestCase):
+    def test_finds_its_own_modules_source_first(self):
+        from urdp import tabletmic
+        listing = ("7\tmodule-null-sink\tsink_name=urdp_tablet_mic_in rate=48000\t\n"
+                   "8\tmodule-remap-source\tsource_name=urdp_tablet_mic master=x\t\n"
+                   "9\tmodule-null-sink\tsink_name=urdp_tablet\t\n"
+                   "10\tmodule-remap-source\tsource_name=other\t\n")
+        with unittest.mock.patch.object(tabletmic, "_pactl",
+                                        return_value=listing):
+            self.assertEqual(tabletmic._our_modules(), ["8", "7"])
+
+    def test_gives_the_default_input_back(self):
+        from urdp import tabletmic
+        calls = []
+
+        def pactl(*args):
+            calls.append(args)
+            return {"get-default-source": "urdp_tablet_mic"}.get(args[0], "")
+
+        mic = tabletmic.Microphone()
+        mic._modules, mic._previous = ["8", "7"], "built-in"
+        with unittest.mock.patch.object(tabletmic, "_pactl", pactl):
+            mic.stop()
+        self.assertEqual(calls, [("get-default-source",),
+                                 ("set-default-source", "built-in"),
+                                 ("unload-module", "8"),
+                                 ("unload-module", "7")])
+
+    def test_a_stuck_player_never_blocks_the_tablet(self):
+        from urdp import tabletmic
+        mic = tabletmic.Microphone()
+        # A pacat that never reads: the pipe fills, then pieces are dropped.
+        process = subprocess.Popen(["sleep", "30"], stdin=subprocess.PIPE)
+        os.set_blocking(process.stdin.fileno(), False)
+        mic._process = process
+        try:
+            piece = b"\1\2" * 480
+            done = threading.Event()
+
+            def flood():
+                for _ in range(2000):                   # 20 s of sound
+                    mic.write(piece)
+                done.set()
+
+            threading.Thread(target=flood, daemon=True).start()
+            self.assertTrue(done.wait(5))
+            mic.write(b"\1")                             # odd: ignored
+            mic.write(bytes(tabletmic.MAX_PIECE + 2))      # too big: ignored
+        finally:
+            process.kill()
+            process.wait()
+            mic._process = None
 
 
 class SpeakerTest(unittest.TestCase):

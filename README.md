@@ -35,6 +35,7 @@ FreeRDP.** Without FreeRDP it can do nothing, so that is the first requirement.
 | `krfb` (`krfb-virtualmonitor`) | Second screen (KDE Plasma Wayland only) | No |
 | `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | Second screen sound | No |
 | GStreamer (`gst-launch-1.0`, PipeWire plugin; VA-API plugins optional) | Second screen fast picture | No |
+| `openssl`, `pacat` | Second screen HTTPS and microphone | No |
 
 FreeRDP **3** is required. FreeRDP 2 spells many options differently
 (`/cert-tofu`, `/monitor-list`); if an older version is found, the application
@@ -208,8 +209,23 @@ reachable from the network.
   sound only after a touch. When sharing stops, the previous output is the
   default again. A program can still be sent elsewhere in the desktop's
   sound settings.
-- **Screen stays on.** The page plays a tiny silent video behind the picture,
-  which keeps Android from dimming the tablet (the Wake Lock API needs HTTPS).
+- **Microphone.** With **Microphone: The tablet's microphone**, URDP adds a
+  "URDP Tablet Microphone" input (a null sink played into with `pacat`, and
+  a source remapped from it) and makes it the default input while sharing
+  runs, so calls and recordings hear the tablet. The browser asks once for
+  the microphone and cleans the sound first: its echo cancelling keeps the
+  computer's sound, playing from the tablet, out of it. The previous input
+  comes back when sharing stops.
+- **HTTPS.** Browsers give only HTTPS pages the microphone, so URDP makes
+  its own certificate with `openssl` (kept in `~/.config/urdp/tablet-tls/`)
+  and serves the page over HTTPS; an old `http://` address is sent on. A
+  local address cannot have a certificate a browser trusts, so the first
+  time the tablet's browser warns that the connection is not private:
+  choose *Advanced* and continue. Without `openssl` the page stays on plain
+  HTTP and the microphone is not offered.
+- **Screen stays on.** The page holds a screen wake lock and also plays a
+  tiny silent video behind the picture, which keeps Android from dimming the
+  tablet where the wake lock is not available.
 - **Access.** Everything but the page files needs the code, which travels in
   the URL fragment (never sent to the server or in a Referer) and is then
   kept in the tablet browser. The code itself never crosses the network: the
@@ -220,9 +236,10 @@ reachable from the network.
   everyone and gives the VNC server a new password.
 - **Whoever has the code controls this session.** The keyboard reaches every
   window, terminals included, like a keyboard plugged into the computer. The
-  connection is plain HTTP: the code stays secret, but someone who can watch
-  the network sees the screen, and one who can alter its traffic can take
-  over. Use it on a home or office network you trust, or over a VPN such as
+  connection is encrypted, so someone who watches the network sees nothing;
+  but the browser cannot tell URDP's certificate from another one, so someone
+  who can alter the network's traffic could pose as this computer when the
+  tablet first connects (or on plain HTTP, at any time). Use it on a home or office network you trust, or over a VPN such as
   Tailscale. Other users of this computer can read the VNC password from the
   process list (`krfb-virtualmonitor` takes it only as an argument) and view,
   not control, the screen.
@@ -332,7 +349,7 @@ integrity, and the tablet screen's sizing, layout, QR codes and web bridge.
 | `theme.py`, `widgets.py` | Dark theme and shared pieces |
 | `tab_*.py` | The five tabs |
 | `mainwindow.py` | Window, profile management, connect flow |
-| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `web/` | Second screen: virtual screen, web server, sound, fast picture, page |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `tabletmic.py`, `tablettls.py`, `web/` | Second screen: virtual screen, web server, sound, fast picture, microphone, HTTPS, page |
 | `qr.py` | Small QR encoder for the tablet address |
 
 ## Licence

@@ -34,6 +34,7 @@ arayüzdür.** FreeRDP kurulu değilse hiçbir şey yapamaz, o yüzden ilk şart
 | `krfb` (`krfb-virtualmonitor`) | İkinci ekran (yalnız KDE Plasma Wayland) | Hayır |
 | `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | İkinci ekran sesi | Hayır |
 | GStreamer (`gst-launch-1.0`, PipeWire eklentisi; VA-API eklentileri isteğe bağlı) | İkinci ekran hızlı görüntü | Hayır |
+| `openssl`, `pacat` | İkinci ekran HTTPS ve mikrofon | Hayır |
 
 FreeRDP **3** gerekiyor. FreeRDP 2 birçok seçeneği farklı yazar
 (`/cert-tofu`, `/monitor-list` gibi); uygulama eski bir sürüm bulursa durum
@@ -205,8 +206,23 @@ gereken **tek bir port** vardır (varsayılan 1701).
   dokunuştan sonra başlatır. Paylaşım durunca önceki çıkış yeniden varsayılan
   olur. Bir program masaüstünün ses ayarlarından yine başka çıkışa
   yönlendirilebilir.
-- **Ekran açık kalır.** Sayfa görüntünün arkasında küçük, sessiz bir video
-  oynatır; Android ekranı karartmaz (Wake Lock API HTTPS ister).
+- **Mikrofon.** **Mikrofon: Tabletin mikrofonu** seçiliyken URDP bir "URDP
+  Tablet Microphone" girişi ekler (`pacat` ile içine çalınan boş bir çıkış ve
+  ondan türetilen bir kaynak) ve paylaşım sürdükçe onu varsayılan giriş
+  yapar; görüşmeler ve kayıtlar tableti duyar. Tarayıcı mikrofon iznini bir
+  kez sorar ve sesi önce temizler: yankı engelleme, tabletten çalan
+  bilgisayar sesini mikrofondan uzak tutar. Paylaşım durunca önceki giriş
+  geri gelir.
+- **HTTPS.** Tarayıcılar mikrofonu yalnız HTTPS sayfalarına verir; bu yüzden
+  URDP `openssl` ile kendi sertifikasını yapar (`~/.config/urdp/tablet-tls/`
+  içinde saklanır) ve sayfayı HTTPS ile sunar; eski bir `http://` adresi
+  oraya yönlendirilir. Yerel bir adres tarayıcının güvendiği bir sertifika
+  alamaz; bu yüzden ilk seferde tabletin tarayıcısı bağlantının gizli
+  olmadığını söyler: *Gelişmiş*'i seçip devam edin. `openssl` yoksa sayfa
+  düz HTTP'de kalır ve mikrofon sunulmaz.
+- **Ekran açık kalır.** Sayfa ekranı uyanık tutma kilidi alır, ayrıca
+  görüntünün arkasında küçük, sessiz bir video oynatır; kilit olmayan yerde
+  de Android ekranı karartmaz.
 - **Erişim.** Sayfa dosyaları dışında her şey kod ister. Kod adresin `#`
   kısmında taşınır (sunucuya ve Referer'a gitmez), sonra tablet tarayıcısında
   saklanır. Kodun kendisi ağdan hiç geçmez: sayfa tek kullanımlık bir soruyu
@@ -216,9 +232,10 @@ gereken **tek bir port** vardır (varsayılan 1701).
   başlatılana kadar erişim kapanır. **Yeni Kod** herkesin bağlantısını keser
   ve VNC sunucusuna yeni parola verir.
 - **Kodu bilen bu oturumu yönetir.** Klavye, terminaller dahil her pencereye
-  ulaşır; bilgisayara takılı bir klavye gibidir. Bağlantı düz HTTP'dir: kod
-  gizli kalır, ama ağı izleyebilen ekranı görür, trafiği değiştirebilen
-  oturumu ele geçirebilir. Güvendiğiniz ev ya da ofis ağında veya Tailscale
+  ulaşır; bilgisayara takılı bir klavye gibidir. Bağlantı şifrelidir; ağı
+  izleyen bir şey görmez. Ama tarayıcı URDP'nin sertifikasını başka birinden
+  ayıramaz; ağın trafiğini değiştirebilen biri tablet ilk bağlandığında (düz
+  HTTP'de her zaman) bu bilgisayar gibi görünebilir. Güvendiğiniz ev ya da ofis ağında veya Tailscale
   gibi bir VPN üzerinden kullanın. Bu bilgisayarın diğer kullanıcıları VNC
   parolasını süreç listesinden okuyabilir (`krfb-virtualmonitor` onu yalnız
   argüman olarak alır) ve ekranı görebilir, yönetemez.
@@ -329,7 +346,7 @@ Kod düzeni:
 | `theme.py` / `widgets.py` | Karanlık tema ve ortak parçalar |
 | `tab_*.py` | Beş sekme |
 | `mainwindow.py` | Pencere, profil yönetimi, bağlanma akışı |
-| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `web/` | İkinci ekran: sanal ekran, web sunucusu, ses, hızlı görüntü, sayfa |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `tabletmic.py`, `tablettls.py`, `web/` | İkinci ekran: sanal ekran, web sunucusu, ses, hızlı görüntü, mikrofon, HTTPS, sayfa |
 | `qr.py` | Tablet adresi için küçük QR üreticisi |
 
 ## Lisans

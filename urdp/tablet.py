@@ -12,13 +12,21 @@ server, so the tablet needs nothing but its browser:
   and the VNC password; it also learns the tablet's screen size, so the
   virtual screen can match it.
 * ``/ws`` is a WebSocket bridged to the VNC server on this machine,
-  ``/input`` one that carries touch, pen and keys, and ``/audio`` one that
-  brings the computer's sound (``tabletaudio``); each wants a ticket.
+  ``/input`` one that carries touch, pen and keys, ``/audio`` one that
+  brings the computer's sound (``tabletaudio``), ``/video`` the fast picture
+  (``tabletvideo``) and ``/mic`` the tablet's microphone (``tabletmic``);
+  each wants a ticket.
+
+The page is served over HTTPS with a certificate URDP makes for itself
+(``tablettls``), because browsers give only HTTPS pages the microphone; the
+tablet's browser warns about it the first time.  Without ``openssl`` it
+stays on plain HTTP.
 
 The access code travels in the URL fragment of the address the QR code holds,
 which browsers never send to a server or put in a Referer; the page keeps it
-in its own storage.  It never crosses the network: the page is plain HTTP, so
-it answers ``HMAC(key, nonce)`` with ``key = PBKDF2(code)``, and the VNC
+in its own storage.  It never crosses the network, not even inside TLS (the
+certificate is not one the browser can check, so TLS alone would not do): it
+answers ``HMAC(key, nonce)`` with ``key = PBKDF2(code)``, and the VNC
 password comes back encrypted with that key.  Someone listening on the
 network learns neither; guessing the code offline from what they saw costs a
 PBKDF2 per guess.  Everything but the page files is behind the code.
@@ -37,6 +45,7 @@ import queue
 import secrets
 import shutil
 import socket
+import ssl
 import string
 import struct
 import subprocess
@@ -52,7 +61,7 @@ from urllib.parse import parse_qs, urlsplit
 from PyQt6.QtCore import (QObject, QProcess, QProcessEnvironment, QTimer,
                           pyqtSignal)
 
-from . import tabletaudio, tabletvideo, uinput
+from . import tabletaudio, tabletmic, tablettls, tabletvideo, uinput
 from .i18n import gettext as _
 from .store import config_dir
 
@@ -84,6 +93,7 @@ INPUTS = [("mouse", "As a mouse (works in every program)"),
 #: Where the computer's sound plays while sharing runs.
 SOUNDS = [("computer", "On the computer"), ("tablet", "On the tablet")]
 #: How the picture reaches the tablet.
+MICS = [("off", "Off"), ("tablet", "The tablet's microphone")]
 PICTURES = [("fast", "Fast (asks once for permission to record the screen)"),
             ("vnc", "Compatible (slower)")]
 #: The sizes that follow the tablet (their labels are translated).
@@ -110,6 +120,8 @@ class Settings:
     sound: str = "computer"
     #: "fast" (the screen through the ScreenCast portal) or "vnc"
     picture: str = "fast"
+    #: "off" or "tablet" (see MICS)
+    mic: str = "off"
     #: The ScreenCast portal's restore token, so it asks only once.
     video_token: str = ""
     code: str = ""
@@ -148,6 +160,8 @@ def load_settings() -> Settings:
         settings.sound = "computer"
     if settings.picture not in dict(PICTURES):
         settings.picture = "fast"
+    if settings.mic not in dict(MICS):
+        settings.mic = "off"
     if not 1024 <= settings.port <= 65535:
         settings.port = DEFAULT_PORT
     if not (200 <= settings.tablet_width <= 8192
@@ -386,7 +400,7 @@ def supported() -> str:
 def _read_page() -> dict[str, bytes]:
     page = {}
     for name in ("tablet.html", "tablet.js", "tablet.css", "auth.js",
-                 "fastview.js"):
+                 "fastview.js", "micworklet.js"):
         try:
             page["/" + name] = (WEB_ROOT / name).read_bytes()
         except OSError:
@@ -416,6 +430,8 @@ def page_strings() -> dict[str, str]:
             "wrong": _("Wrong code"),
             "wait": _("Too many wrong codes; wait a minute and try again."),
             "sound": _("Touch the screen to turn on the sound."),
+            "mic": _("Touch the screen to turn on the microphone."),
+            "nomic": _("The browser did not allow the microphone."),
             "connect": _("Connect"),
             "fullscreen": _("Full Screen")}
 
@@ -567,8 +583,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = url.path
         if path == "/":
             path = "/tablet.html"
-        if (path in ("/nonce", "/hello", "/ws", "/input", "/audio", "/video")
-                and not self._same_site()):
+        if (path in ("/nonce", "/hello", "/ws", "/input", "/audio", "/video",
+                     "/mic") and not self._same_site()):
             self._send(403, b"forbidden", "text/plain")
         elif path == "/nonce":
             self._json({"nonce": self.server.owner.new_nonce(),
@@ -584,6 +600,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._audio(query)
         elif path == "/video":
             self._video(query)
+        elif path == "/mic":
+            self._mic(query)
         else:
             self._static(path)
 
@@ -641,6 +659,7 @@ class _Handler(BaseHTTPRequestHandler):
         restart = owner.tablet_seen(w, h, ratio)
         answer.update(ok=True, restart=restart, input=owner.has_input,
                       audio=owner.has_audio, video=owner.has_video,
+                      mic=owner.has_mic,
                       ticket=owner.new_ticket(self.client_address[0]),
                       password=seal(owner.key(), nonce, owner.vnc_password))
         self._json(answer)
@@ -674,7 +693,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         self.close_connection = True
         self.connection.settimeout(None)
-        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self.connection.family != socket.AF_UNIX:      # not behind TLS
+            self.connection.setsockopt(socket.IPPROTO_TCP,
+                                       socket.TCP_NODELAY, 1)
 
     def _input(self, query: dict) -> None:
         owner = self.server.owner
@@ -753,6 +774,26 @@ class _Handler(BaseHTTPRequestHandler):
             bridge.close()
             owner.audio_closed(bridge)
 
+    def _mic(self, query: dict) -> None:
+        """What the tablet hears, one binary message per 10 ms piece."""
+        owner = self.server.owner
+        epoch = self._may_upgrade(query, "mic")
+        if not epoch:
+            return
+        if not owner.has_mic:
+            self._send(503, b"no microphone", "text/plain")
+            return
+        self._upgrade()
+        bridge = _Bridge(self.connection, self.rfile)
+        bridge.on_message = lambda piece: owner.mic_in(bridge, piece)
+        if not owner.mic_opened(bridge, epoch):    # shut out meanwhile
+            bridge.close()
+            return
+        try:
+            bridge.run()
+        finally:
+            owner.mic_closed(bridge)
+
     def _websocket(self, query: dict) -> None:
         owner = self.server.owner
         if not self._may_upgrade(query, "ws"):
@@ -795,12 +836,43 @@ class _Latest:
             return frame
 
 
+_HOST_CHARS = set(string.ascii_letters + string.digits + ".-:[]")
+
+
+class _Redirect(BaseHTTPRequestHandler):
+    """Plain HTTP (an old bookmark, a typed address): on to HTTPS.  The
+    browser carries the address's fragment, and so the code, along."""
+    protocol_version = "HTTP/1.1"
+    timeout = 15
+
+    def log_message(self, *_args) -> None:
+        pass
+
+    def do_GET(self) -> None:                  # noqa: N802
+        host = self.headers.get("Host", "")
+        path = self.path if self.path.startswith("/") else "/"
+        if (not host or len(host) > 255 or set(host) - _HOST_CHARS
+                or any(ord(c) < 0x21 or ord(c) > 0x7E for c in path)):
+            self.send_error(400)
+            return
+        self.send_response(301)
+        self.send_header("Location", f"https://{host}{path}")
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+    do_HEAD = do_GET
+
+
 class _WebServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, port: int, owner: "TabletScreen") -> None:
+    def __init__(self, port: int, owner: "TabletScreen",
+                 tls: "ssl.SSLContext | None" = None) -> None:
         self.owner = owner
+        self.tls = tls
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         super().__init__(("0.0.0.0", port), _Handler)
 
@@ -821,6 +893,23 @@ class _WebServer(ThreadingHTTPServer):
             super().process_request_thread(request, client_address)
         finally:
             self._slots.release()
+
+    def finish_request(self, request, client_address) -> None:
+        if self.tls is None:
+            super().finish_request(request, client_address)
+            return
+        try:
+            if not tablettls.is_tls(request):
+                _Redirect(request, client_address, self)
+                return
+            request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            inner = tablettls.unwrap(request, self.tls)
+        except (OSError, ValueError):
+            return                          # a failed handshake: nothing to say
+        try:
+            self.RequestHandlerClass(inner, client_address, self)
+        finally:
+            inner.close()
 
     def handle_error(self, request, client_address) -> None:
         """A tablet that drops off Wi-Fi is normal, not worth a traceback."""
@@ -870,6 +959,10 @@ class TabletScreen(QObject):
         self._speaker: tabletaudio.Speaker | None = None
         self._audio: tuple[_Bridge, queue.Queue] | None = None
         self._capture: tabletvideo.Capture | None = None
+        self._mic: tabletmic.Microphone | None = None
+        self._mic_bridge: _Bridge | None = None
+        self._tls_context: ssl.SSLContext | None = None
+        self._tls_tried = False
         self._video: tuple[_Bridge, _Latest] | None = None
         self._video_ready = False
         self._last_frame = b""
@@ -891,8 +984,17 @@ class TabletScreen(QObject):
     def running(self) -> bool:
         return self._server is not None
 
+    def tls(self) -> ssl.SSLContext | None:
+        """HTTPS for the page, made once (see tablettls)."""
+        if not self._tls_tried:
+            self._tls_tried = True
+            self._tls_context = tablettls.context()
+        return self._tls_context
+
     def url(self, address: str) -> str:
-        return f"http://{address}:{self.settings.port}/#k={self.settings.code}"
+        scheme = "https" if self.tls() is not None else "http"
+        return (f"{scheme}://{address}:{self.settings.port}/"
+                f"#k={self.settings.code}")
 
     def start(self) -> None:
         if self.running:
@@ -910,7 +1012,7 @@ class TabletScreen(QObject):
             self._nonces.clear()
             self._tickets.clear()
         try:
-            self._server = _WebServer(self.settings.port, self)
+            self._server = _WebServer(self.settings.port, self, self.tls())
         except OSError as exc:
             self._server = None
             self._set_state("error", _("Could not open port {port}: {error}")
@@ -921,6 +1023,7 @@ class TabletScreen(QObject):
                          daemon=True).start()
         self._open_input()
         self._open_audio()
+        self._open_mic()
         self.notice.emit("")
         self._set_state("starting")
         s = self.settings
@@ -939,6 +1042,7 @@ class TabletScreen(QObject):
             bridge.close()
         self._close_input()
         self._close_audio()
+        self._close_mic()
         self._stop_monitor()
         self._client_address = ""
         self._set_state("stopped")
@@ -955,12 +1059,12 @@ class TabletScreen(QObject):
             self._tickets.clear()
             self._epoch += 1
             bridges, self._bridges = self._bridges, []
-            for channel in (self._input_bridge,
+            for channel in (self._input_bridge, self._mic_bridge,
                             self._audio and self._audio[0],
                             self._video and self._video[0]):
                 if channel is not None:
                     bridges.append(channel)
-            self._audio = self._video = None
+            self._audio = self._video = self._mic_bridge = None
         for bridge in bridges:
             bridge.close()
         if self.running:
@@ -1214,6 +1318,68 @@ class TabletScreen(QObject):
                 audio[1].put_nowait(piece)
             except queue.Full:
                 pass
+
+    # -------------------------------------------------------- microphone
+    @property
+    def has_mic(self) -> bool:
+        return self._mic is not None
+
+    def mic_possible(self) -> bool:
+        """The page can have the microphone only over HTTPS."""
+        return tabletmic.available() and self.tls() is not None
+
+    def _open_mic(self) -> None:
+        if (self.settings.mic == "tablet" and self._mic is None
+                and self._server is not None and self._server.tls is not None):
+            mic = tabletmic.Microphone()
+            self._mic = mic if mic.start() else None
+
+    def set_mic(self, mic: str) -> None:
+        """Like set_sound: the page learns about it when it reconnects."""
+        if mic == self.settings.mic:
+            return
+        self.settings.mic = mic
+        save_settings(self.settings)
+        if not self.running:
+            return
+        if mic == "tablet":
+            self._open_mic()
+            with self._lock:
+                bridges, self._bridges = self._bridges, []
+            for bridge in bridges:
+                bridge.close()
+        else:
+            self._close_mic()
+
+    def _close_mic(self) -> None:
+        with self._lock:
+            bridge, self._mic_bridge = self._mic_bridge, None
+        if bridge is not None:
+            bridge.close()
+        mic, self._mic = self._mic, None
+        if mic is not None:
+            mic.stop()
+
+    def mic_opened(self, bridge: _Bridge, epoch: int) -> bool:
+        """One tablet's microphone at a time, the newest; False when its
+        ticket is from before a Stop or New Code."""
+        with self._lock:
+            if epoch != self._epoch:
+                return False
+            old, self._mic_bridge = self._mic_bridge, bridge
+        if old is not None:
+            old.close()
+        return True
+
+    def mic_closed(self, bridge: _Bridge) -> None:
+        with self._lock:
+            if self._mic_bridge is bridge:
+                self._mic_bridge = None
+
+    def mic_in(self, bridge: _Bridge, piece: bytes) -> None:
+        mic = self._mic
+        if mic is not None and bridge is self._mic_bridge:
+            mic.write(piece)
 
     # ------------------------------------------- called from web threads
     def key(self) -> bytes:

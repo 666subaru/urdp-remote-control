@@ -147,6 +147,8 @@ async function connect() {
     failures = 0;
     if (answer.input) openInput(ticket);
     if (answer.audio) openAudio(ticket);
+    if (answer.mic) openMic(ticket);
+    else stopMic();
     document.body.classList.add('live');
     status(text('connected', 'Connected'));
     updateChrome();
@@ -157,6 +159,7 @@ async function connect() {
     rfb = null;
     if (inputSock) inputSock.close();
     if (audioSock) audioSock.close();
+    if (micSock) micSock.close();
     document.body.classList.remove('live');
     updateChrome();
     retryLater();
@@ -182,8 +185,7 @@ function openInput(ticket) {
 // absorbs Wi-Fi jitter.  The cushion adapts: it starts small, grows a step
 // each time the sound runs dry, and shrinks back after a calm spell.  When
 // pieces pile up past it, they are dropped, so the sound never falls behind
-// the picture.  (AudioWorklet would be smoother but needs HTTPS.)  Browsers
-// start sound only after a touch.
+// the picture.  Browsers start sound only after a touch.
 const RATE = 48000;
 const MIN_CUSHION = 0.03, MAX_CUSHION = 0.2, STEP = 0.02;   // seconds
 const SLACK = 0.05;              // tolerated above the cushion before dropping
@@ -246,15 +248,74 @@ function playPiece(data) {
 }
 
 function soundHint() {
-  const waiting = !!(audioSock && audioCtx && audioCtx.state !== 'running');
-  $('soundhint').hidden = !waiting;
-  $('soundhint').textContent = text('sound', 'Touch the screen to turn on the sound.');
+  const sound = !!(audioSock && audioCtx && audioCtx.state !== 'running');
+  const mic = !!(micSock && micCtx && micCtx.state !== 'running');
+  const hint = $('soundhint');
+  if (sound) hint.textContent = text('sound', 'Touch the screen to turn on the sound.');
+  else if (mic) hint.textContent = text('mic', 'Touch the screen to turn on the microphone.');
+  else if (micRefused) hint.textContent = text('nomic', 'The browser did not allow the microphone.');
+  hint.hidden = !(sound || mic || micRefused);
 }
 
 function startSound() {
-  if (audioCtx && audioCtx.state !== 'running') {
-    audioCtx.resume().then(soundHint, () => {});
+  for (const ctx of [audioCtx, micCtx]) {
+    if (ctx && ctx.state !== 'running') ctx.resume().then(soundHint, () => {});
   }
+}
+
+// ------------------------------------------------------------- microphone
+// What the tablet hears goes to the computer's "URDP Tablet Microphone" as
+// 10 ms pieces of 48 kHz 16-bit mono (micworklet.js cuts them).  The browser
+// cleans it first: its echo cancelling keeps the computer's sound, playing
+// from this tablet, out of it.  Browsers allow the microphone only over
+// HTTPS.  The microphone stays open across reconnects, so the browser asks
+// once; when the computer turns it off, it is closed.
+let micSock = null;
+let micCtx = null;
+let micStream = null;
+let micSetup = null;
+let micRefused = false;
+const MIC_BACKLOG = 9600;        // bytes waiting to be sent: 100 ms
+
+async function setupMic() {
+  if (!navigator.mediaDevices || !window.AudioWorkletNode) throw new Error('no microphone here');
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+  });
+  micCtx = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive' });
+  micCtx.addEventListener('statechange', soundHint);
+  await micCtx.audioWorklet.addModule('micworklet.js');
+  const node = new AudioWorkletNode(micCtx, 'urdp-mic');
+  micCtx.createMediaStreamSource(micStream).connect(node);
+  node.connect(micCtx.destination);        // silent; keeps it running
+  node.port.onmessage = (ev) => {
+    if (micSock && micSock.readyState === WebSocket.OPEN
+        && micSock.bufferedAmount < MIC_BACKLOG) micSock.send(ev.data);
+  };
+}
+
+function openMic(ticket) {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const sock = new WebSocket(`${scheme}://${location.host}/mic?t=${ticket}`);
+  sock.binaryType = 'arraybuffer';
+  sock.addEventListener('open', () => { micSock = sock; soundHint(); });
+  sock.addEventListener('close', () => { if (micSock === sock) micSock = null; soundHint(); });
+  sock.addEventListener('error', () => sock.close());
+  if (!micSetup) {
+    micSetup = setupMic().then(() => { micRefused = false; soundHint(); }, () => {
+      stopMic();
+      micRefused = true;                   // said for a while, then dropped
+      soundHint();
+      setTimeout(() => { micRefused = false; soundHint(); }, 5000);
+      sock.close();
+    });
+  }
+}
+
+function stopMic() {
+  if (micStream) micStream.getTracks().forEach((track) => track.stop());
+  if (micCtx) micCtx.close().catch(() => {});
+  micStream = micCtx = micSetup = null;
 }
 
 function direct() { return inputSock && inputSock.readyState === WebSocket.OPEN; }
@@ -576,9 +637,9 @@ window.addEventListener('resize', () => {
 });
 
 // ------------------------------------------------------------- stay awake
-// The Wake Lock API exists only on HTTPS pages, and this page is plain HTTP
-// on the local network.  Android also keeps the screen on while a video
-// plays, so a tiny silent black video loops instead.  Playing needs a user
+// The Wake Lock API exists only on HTTPS pages, and without openssl on the
+// computer this page is plain HTTP.  Android also keeps the screen on while a
+// video plays, so a tiny silent black video loops as well.  Playing needs a user
 // gesture, hence the first touch starts it.
 const keepAwake = document.createElement('video');
 keepAwake.src = 'keepawake.mp4';
