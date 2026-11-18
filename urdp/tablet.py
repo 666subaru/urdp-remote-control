@@ -556,7 +556,38 @@ class _Bridge:
 
 
 # ------------------------------------------------------------- web server
-class _Handler(BaseHTTPRequestHandler):
+#: Seconds to send a whole request head.  The socket timeout is per read, so
+#: without this a client trickling a byte now and then could hold a
+#: connection slot for ever.
+HEAD_DEADLINE = 20
+
+
+class _Deadline(BaseHTTPRequestHandler):
+    """Drops a connection whose request head takes too long."""
+
+    def handle_one_request(self) -> None:
+        self._head_timer = threading.Timer(HEAD_DEADLINE, self._too_slow)
+        self._head_timer.daemon = True
+        self._head_timer.start()
+        try:
+            super().handle_one_request()
+        finally:
+            self._head_timer.cancel()
+
+    def parse_request(self) -> bool:
+        try:
+            return super().parse_request()
+        finally:
+            self._head_timer.cancel()          # the head is in
+
+    def _too_slow(self) -> None:
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+
+class _Handler(_Deadline):
     protocol_version = "HTTP/1.1"
     #: A connection that sends nothing is dropped; WebSockets clear this.
     timeout = 15
@@ -872,7 +903,7 @@ class _Latest:
 _HOST_CHARS = set(string.ascii_letters + string.digits + ".-:[]")
 
 
-class _Redirect(BaseHTTPRequestHandler):
+class _Redirect(_Deadline):
     """Plain HTTP (an old bookmark, a typed address): on to HTTPS.  The
     browser carries the address's fragment, and so the code, along."""
     protocol_version = "HTTP/1.1"
@@ -906,6 +937,7 @@ class _WebServer(ThreadingHTTPServer):
                  tls: "ssl.SSLContext | None" = None) -> None:
         self.owner = owner
         self.tls = tls
+        self._local = threading.local()
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         super().__init__(("0.0.0.0", port), _Handler)
 
@@ -922,10 +954,15 @@ class _WebServer(ThreadingHTTPServer):
             raise
 
     def process_request_thread(self, request, client_address) -> None:
+        self._local.pumped = False
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._slots.release()
+            # Behind TLS the pump still holds the connection: it gives the
+            # slot back when it ends, so a tablet that stops reading cannot
+            # pile up pumps beyond MAX_CONNECTIONS.
+            if not self._local.pumped:
+                self._slots.release()
 
     def finish_request(self, request, client_address) -> None:
         if self.tls is None:
@@ -936,9 +973,10 @@ class _WebServer(ThreadingHTTPServer):
                 _Redirect(request, client_address, self)
                 return
             request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            inner = tablettls.unwrap(request, self.tls)
+            inner = tablettls.unwrap(request, self.tls, self._slots.release)
         except (OSError, ValueError):
             return                          # a failed handshake: nothing to say
+        self._local.pumped = True
         try:
             self.RequestHandlerClass(inner, client_address, self)
         finally:

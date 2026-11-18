@@ -16,14 +16,15 @@ import shutil
 import subprocess
 import threading
 
-from .tabletaudio import _pactl
+from .tabletaudio import _pactl, forget, remember, undo
 
 SOURCE = "urdp_tablet_mic"
 SINK = "urdp_tablet_mic_in"          # what pacat plays into; not for programs
 DESCRIPTION = "URDP Tablet Microphone"
 RATE, CHANNELS = 48000, 1
-#: The most one message may carry: 100 ms; the page sends 10 ms at a time.
-MAX_PIECE = RATE // 10 * CHANNELS * 2
+#: The most one message may carry: the page sends 10 ms (960 bytes) at a
+#: time, and up to PIPE_BUF a write to a pipe goes whole or not at all.
+MAX_PIECE = 4096
 #: The pipe to pacat holds this much (about 85 ms); when the tablet sends
 #: faster than the computer plays, what does not fit is dropped, so the
 #: delay cannot grow.
@@ -50,6 +51,13 @@ def _our_modules() -> list[str]:
     return sources + sinks
 
 
+def recover() -> None:
+    """What a URDP that crashed left behind: our microphone, maybe still
+    the default input."""
+    if available():
+        undo("source", SOURCE, _our_modules())
+
+
 class Microphone:
     """The virtual microphone; :meth:`write` feeds it."""
 
@@ -66,8 +74,7 @@ class Microphone:
     def start(self) -> bool:
         if self.running or not available():
             return self.running
-        for module in _our_modules():
-            _pactl("unload-module", module)
+        undo("source", SOURCE, _our_modules())
         self._previous = _pactl("get-default-source")
         sink = _pactl(
             "load-module", "module-null-sink", f"sink_name={SINK}",
@@ -85,6 +92,8 @@ class Microphone:
             self.stop()
             return False
         self._modules.insert(0, source)
+        if self._previous and self._previous != SOURCE:
+            remember("source", self._previous)
         _pactl("set-default-source", SOURCE)
         try:
             self._process = subprocess.Popen(
@@ -140,3 +149,4 @@ class Microphone:
             for module in self._modules:
                 _pactl("unload-module", module)
             self._modules = []
+            forget("source")

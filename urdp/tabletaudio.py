@@ -16,6 +16,8 @@ import subprocess
 import threading
 from collections.abc import Callable
 
+from .store import config_dir
+
 SINK = "urdp_tablet"
 DESCRIPTION = "URDP Tablet"
 RATE, CHANNELS = 48000, 2
@@ -46,6 +48,69 @@ def _our_modules() -> list[str]:
     return found
 
 
+# A URDP that crashed cannot give the default back, so the one it replaced is
+# noted in a file while ours is the default; the next URDP puts it back.
+def _note(kind: str):
+    return config_dir() / f"tablet-{kind}-previous"
+
+
+def remember(kind: str, previous: str) -> None:
+    try:
+        path = _note(kind)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{previous}\n{os.getpid()}\n", "utf-8")
+    except OSError:
+        pass
+
+
+def forget(kind: str) -> None:
+    try:
+        _note(kind).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def recall(kind: str) -> tuple[str, bool]:
+    """The noted default, and whether the URDP that noted it still runs
+    (then it is not ours to undo)."""
+    try:
+        previous, pid = _note(kind).read_text("utf-8").split("\n")[:2]
+        pid_number = int(pid)
+    except (OSError, ValueError):
+        return "", False
+    alive = False
+    if pid_number != os.getpid():
+        try:
+            os.kill(pid_number, 0)
+            alive = True
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            alive = True
+    return previous.strip(), alive
+
+
+def undo(kind: str, ours: str, modules: list[str]) -> None:
+    """Unloads *modules* left behind and gives back the default *kind*
+    ("sink" or "source") they took, unless another URDP still uses them."""
+    previous, alive = recall(kind)
+    if alive:
+        return
+    if modules:
+        if previous and previous != ours and _pactl(f"get-default-{kind}") == ours:
+            _pactl(f"set-default-{kind}", previous)
+        for module in modules:
+            _pactl("unload-module", module)
+    forget(kind)
+
+
+def recover() -> None:
+    """What a URDP that crashed left behind: our speaker, maybe still the
+    default output."""
+    if available():
+        undo("sink", SINK, _our_modules())
+
+
 class Speaker:
     """The virtual speaker and its recorder.  *listener* gets each piece of
     sound (bytes); silence is not passed on."""
@@ -63,8 +128,7 @@ class Speaker:
     def start(self) -> bool:
         if self.running or not available():
             return self.running
-        for module in _our_modules():
-            _pactl("unload-module", module)
+        undo("sink", SINK, _our_modules())
         self._previous = _pactl("get-default-sink")
         self._module = _pactl(
             "load-module", "module-null-sink", f"sink_name={SINK}",
@@ -72,6 +136,8 @@ class Speaker:
             f'sink_properties="device.description=\\"{DESCRIPTION}\\""')
         if not self._module:
             return False
+        if self._previous and self._previous != SINK:
+            remember("sink", self._previous)
         _pactl("set-default-sink", SINK)
         try:
             self._process = subprocess.Popen(
@@ -102,6 +168,7 @@ class Speaker:
                 _pactl("set-default-sink", self._previous)
             _pactl("unload-module", self._module)
             self._module = ""
+            forget("sink")
 
     def _read(self, process: subprocess.Popen) -> None:
         fd = process.stdout.fileno()

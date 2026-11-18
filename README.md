@@ -221,7 +221,8 @@ reachable from the network.
   sends what that camera sees as JPEGs (up to 30 a second), and GStreamer
   turns them into a 1280 × 720 camera on this computer, "URDP Tablet
   Camera", while sharing runs (an upright tablet gets black bars at the
-  sides). When a `v4l2loopback` device is loaded and writable, URDP uses it,
+  sides). When a `v4l2loopback` device named "URDP Tablet Camera" is loaded and
+  writable, URDP uses it (never another program's loopback camera),
   and every program sees the camera. Without one, URDP makes a PipeWire
   camera, which programs that use PipeWire see (OBS, Firefox, KDE's own)
   and others do not. To load the module (as root; the second line keeps it

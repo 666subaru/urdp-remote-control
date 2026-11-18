@@ -30,6 +30,7 @@ def main() -> int:
     app.setWindowIcon(app_icon())
 
     i18n.set_language(_initial_language())
+    tabletdialog.recover()
 
     # Changing the language rebuilds the window: every label is translated when
     # it is constructed, so re-running the constructor is the complete fix.

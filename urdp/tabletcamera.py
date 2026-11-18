@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import termios
 import threading
+from pathlib import Path
 
 from .tabletvideo import _has_element
 
@@ -32,6 +33,9 @@ DESCRIPTION = "URDP Tablet Camera"
 WIDTH, HEIGHT = 1280, 720
 #: A picture larger than this is not from the page.
 MAX_PICTURE = 4 * 1024 * 1024
+#: Nor one with more pixels than this: a few bytes can claim 65000 × 65000,
+#: and the decoder would set aside gigabytes for it.
+MAX_PIXELS = 4096 * 4096
 PIPE_SIZE = 1024 * 1024
 #: Pictures waiting for GStreamer: beyond about two, new ones are dropped,
 #: so the camera never lags.
@@ -47,15 +51,50 @@ def available() -> bool:
 
 
 def loopback() -> str:
-    """A writable v4l2loopback device, or ""."""
+    """The writable v4l2loopback device named for URDP, or "".  Only that
+    one: another loopback device may be some other program's camera."""
     for entry in sorted(glob.glob("/sys/class/video4linux/video*")):
         # Loopback devices hang off the virtual bus; cameras off USB or PCI.
         if "/devices/virtual/" not in os.path.realpath(entry):
+            continue
+        try:
+            name = Path(entry, "name").read_text("utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if name != DESCRIPTION:
             continue
         device = "/dev/" + os.path.basename(entry)
         if os.access(device, os.W_OK):
             return device
     return ""
+
+
+def picture_size(picture: bytes) -> tuple[int, int]:
+    """Width and height a JPEG declares, or (0, 0) when it has none."""
+    at = 2
+    while at + 4 <= len(picture):
+        if picture[at] != 0xFF:
+            return 0, 0
+        marker = picture[at + 1]
+        if marker == 0xFF:                       # fill byte
+            at += 1
+            continue
+        if marker in (0x01, *range(0xD0, 0xD8)):  # no length
+            at += 2
+            continue
+        length = int.from_bytes(picture[at + 2:at + 4], "big")
+        if length < 2:
+            return 0, 0
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            if at + 9 > len(picture):
+                return 0, 0
+            height = int.from_bytes(picture[at + 5:at + 7], "big")
+            width = int.from_bytes(picture[at + 7:at + 9], "big")
+            return width, height
+        if marker == 0xDA:                       # the image data: no size
+            return 0, 0
+        at += 2 + length
+    return 0, 0
 
 
 def _black() -> bytes:
@@ -136,6 +175,9 @@ class Camera:
                 or not picture.startswith(b"\xff\xd8")
                 or not picture.rstrip(b"\0").endswith(b"\xff\xd9")):
             return
+        width, height = picture_size(picture)
+        if not (0 < width and 0 < height and width * height <= MAX_PIXELS):
+            return
         with self._lock:
             process = self._process
             if process is None:
@@ -145,7 +187,9 @@ class Camera:
                 size = fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ)
                 waiting = int.from_bytes(fcntl.ioctl(
                     fd, termios.FIONREAD, b"\0\0\0\0"), "little")
-                if (waiting + len(picture) > size
+                # The margin: a pipe holds pages, not bytes, so a write of
+                # exactly the free bytes might not fit whole.
+                if (waiting + len(picture) + 65536 > size
                         or waiting > (BACKLOG - 1) * len(picture)):
                     return                              # behind: dropped
                 view = memoryview(picture)

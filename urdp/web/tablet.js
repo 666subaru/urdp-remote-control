@@ -27,6 +27,8 @@ let pageVersion = '';            // the page files this page was loaded from
 let inputSock = null;            // direct touch / pen channel, when offered
 let fastFailures = 0;            // fast pictures in a row that never showed
 let derived = { from: '', key: null };   // the key the code makes, kept
+let releaseTimer = 0;            // lets microphone and camera go when away
+const RELEASE_AFTER = 30000;     // ms
 
 function keyFor(salt, rounds) {
   const from = [code, salt, rounds].join('\n');
@@ -145,6 +147,7 @@ async function connect() {
   rfb.focusOnClick = false;
   rfb.addEventListener('connect', () => {
     failures = 0;
+    clearTimeout(releaseTimer);
     if (answer.input) openInput(ticket);
     if (answer.audio) openAudio(ticket);
     if (answer.mic) openMic(ticket);
@@ -163,6 +166,11 @@ async function connect() {
     if (audioSock) audioSock.close();
     if (micSock) micSock.close();
     if (camSock) camSock.close();
+    // A short drop keeps the microphone and camera (no new question from
+    // the browser); a long one lets them go, so the tablet does not keep
+    // showing them in use while nothing is sent.
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(() => { if (!rfb) { stopMic(); stopCamera(); } }, RELEASE_AFTER);
     document.body.classList.remove('live');
     updateChrome();
     retryLater();

@@ -728,6 +728,50 @@ class TlsTest(unittest.TestCase):
         self.assertIn(b" 400 ", sock.recv(100))
         sock.close()
 
+    def test_a_tablet_that_stops_reading_gives_its_slot_back(self):
+        """It cannot hold a thread for ever: the pump gives up after STALL
+        seconds without progress, and the slot comes back with it."""
+        from urdp import tablettls
+        pumps = lambda: sum(t._target is tablettls._pump              # noqa: E731
+                            for t in threading.enumerate()
+                            if hasattr(t, "_target"))
+        raw = socket.socket()
+        raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        raw.connect(("127.0.0.1", self.port))
+        sock = self.client.wrap_socket(raw)
+        # Many requests for a big file, never read: replies pile up.
+        sock.sendall(b"GET /novnc/core/rfb.js HTTP/1.1\r\nHost: x\r\n\r\n" * 40)
+        busy = tablet.MAX_CONNECTIONS - 1
+        with unittest.mock.patch.object(tablettls, "STALL", 1), \
+                unittest.mock.patch.object(tablettls, "LINGER", 1):
+            for _ in range(100):
+                if self.server._slots._value == busy:
+                    break
+                threading.Event().wait(0.05)
+            self.assertEqual(self.server._slots._value, busy)   # still held
+            for _ in range(200):
+                if self.server._slots._value == tablet.MAX_CONNECTIONS:
+                    break
+                threading.Event().wait(0.05)
+        self.assertEqual(self.server._slots._value, tablet.MAX_CONNECTIONS)
+        self.assertEqual(pumps(), 0)            # the pump itself is gone
+        sock.close()
+
+    def test_a_request_head_must_come_in_time(self):
+        with unittest.mock.patch.object(tablet, "HEAD_DEADLINE", 0.5):
+            raw = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            sock = self.client.wrap_socket(raw)
+            sock.sendall(b"GET / HTTP/1.1\r\n")       # and then a trickle
+            started = threading.Event()
+            started.wait(1.5)
+            try:
+                sock.sendall(b"X-Slow: 1\r\n")
+                data = sock.recv(100)
+            except OSError:
+                data = b""
+            self.assertEqual(data, b"")                  # dropped
+            sock.close()
+
     def test_websocket_through_tls_both_ways(self):
         """Large frames out while the page talks: the pump must not stall
         or mix them up."""
@@ -778,6 +822,61 @@ class TlsTest(unittest.TestCase):
                 self.assertEqual((first, data), (0x8A, b"ping"))    # pong
         self.assertEqual(got, frames)
         sock.close()
+
+
+class RecoveryTest(unittest.TestCase):
+    """A URDP that crashed left its speaker or microphone as the default."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = unittest.mock.patch.dict(os.environ,
+                                            {"XDG_CONFIG_HOME": self.tmp.name})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def _undo(self, pid, default="urdp_tablet_mic"):
+        from urdp import tabletaudio
+        tabletaudio.remember("source", "built-in")
+        note = tabletaudio._note("source")
+        note.write_text(f"built-in\n{pid}\n")
+        calls = []
+
+        def pactl(*args):
+            calls.append(args)
+            return default if args[0] == "get-default-source" else ""
+
+        with unittest.mock.patch.object(tabletaudio, "_pactl", pactl):
+            tabletaudio.undo("source", "urdp_tablet_mic", ["8", "7"])
+        return calls, note.exists()
+
+    def test_the_default_comes_back_after_a_crash(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        calls, kept = self._undo(dead.pid)
+        self.assertEqual(calls, [("get-default-source",),
+                                 ("set-default-source", "built-in"),
+                                 ("unload-module", "8"),
+                                 ("unload-module", "7")])
+        self.assertFalse(kept)
+
+    def test_a_running_urdp_is_left_alone(self):
+        alive = subprocess.Popen(["sleep", "30"])
+        try:
+            calls, kept = self._undo(alive.pid)
+        finally:
+            alive.kill()
+            alive.wait()
+        self.assertEqual(calls, [])
+        self.assertTrue(kept)
+
+    def test_a_default_the_user_changed_is_kept(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        calls, _kept = self._undo(dead.pid, default="headset")
+        self.assertNotIn(("set-default-source", "built-in"), calls)
 
 
 class MicrophoneTest(unittest.TestCase):
@@ -834,7 +933,25 @@ class MicrophoneTest(unittest.TestCase):
             mic._process = None
 
 
+def _jpeg(width, height, padding):
+    """Enough of a JPEG for the checks: SOI, an APP0, a SOF0, EOI."""
+    app0 = b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    sof = (b"\xff\xc0\x00\x11\x08" + height.to_bytes(2, "big")
+           + width.to_bytes(2, "big") + b"\x03" + bytes(9))
+    return b"\xff\xd8" + app0 + sof + bytes(padding) + b"\xff\xd9"
+
+
 class CameraTest(unittest.TestCase):
+    def test_picture_size_is_read_from_the_frame_header(self):
+        from urdp import tabletcamera
+        self.assertEqual(tabletcamera.picture_size(_jpeg(960, 1280, 5)),
+                         (960, 1280))
+        self.assertEqual(tabletcamera.picture_size(b"\xff\xd8\xff\xda\x00\x02"),
+                         (0, 0))
+        self.assertEqual(tabletcamera.picture_size(b"\xff\xd8\x00\x00"), (0, 0))
+        self.assertEqual(tabletcamera.picture_size(b"\xff\xd8\xff\xe0\x00\x00"),
+                         (0, 0))
+
     def test_pipewire_without_a_loopback_device(self):
         from urdp import tabletcamera
         args = tabletcamera.pipeline("")
@@ -849,15 +966,18 @@ class CameraTest(unittest.TestCase):
     def test_only_loopback_devices_are_used(self):
         from urdp import tabletcamera
         with tempfile.TemporaryDirectory() as tmp:
-            for name, where in (("video0", "pci0000:00/usb3/video4linux"),
-                                ("video9", "virtual/video4linux")):
+            for name, where, label in (
+                    ("video0", "pci0000:00/usb3/video4linux", "URDP Tablet Camera"),
+                    ("video8", "virtual/video4linux", "OBS Virtual Camera"),
+                    ("video9", "virtual/video4linux", "URDP Tablet Camera")):
                 target = Path(tmp, "devices", where, name)
                 target.mkdir(parents=True)
+                (target / "name").write_text(label + "\n")
                 os.symlink(target, Path(tmp, name))
             with unittest.mock.patch.object(
                     tabletcamera.glob, "glob",
-                    return_value=[str(Path(tmp, "video0")),
-                                  str(Path(tmp, "video9"))]), \
+                    return_value=[str(Path(tmp, n))
+                                  for n in ("video0", "video8", "video9")]), \
                     unittest.mock.patch.object(tabletcamera.os, "access",
                                                return_value=True) as access:
                 self.assertEqual(tabletcamera.loopback(), "/dev/video9")
@@ -871,9 +991,11 @@ class CameraTest(unittest.TestCase):
         os.set_blocking(fd, False)
         camera._process = process
         try:
-            picture = b"\xff\xd8" + bytes(100_000) + b"\xff\xd9"
+            picture = _jpeg(1280, 720, 100_000)
             for bad in (b"not a jpeg", b"\xff\xd8" + bytes(10),
-                        b"\xff\xd8" + bytes(tabletcamera.MAX_PICTURE) + b"\xff\xd9"):
+                        b"\xff\xd8" + bytes(100) + b"\xff\xd9",       # no size
+                        _jpeg(65000, 65000, 10),                       # bomb
+                        _jpeg(1280, 720, tabletcamera.MAX_PICTURE)):
                 camera.write(bad)
             self.assertEqual(self._waiting(fd), 0)
             done = threading.Event()

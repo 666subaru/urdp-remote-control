@@ -218,7 +218,8 @@ gereken **tek bir port** vardır (varsayılan 1701).
   kameranın gördüğünü JPEG olarak gönderir (saniyede 30'a kadar), GStreamer
   da paylaşım sürdükçe bunu bu bilgisayarda 1280 × 720 bir kamera yapar:
   "URDP Tablet Camera" (dik duran tablette yanlarda siyah bant olur).
-  Yüklü ve yazılabilir bir `v4l2loopback` aygıtı varsa URDP onu kullanır ve
+  "URDP Tablet Camera" adlı, yüklü ve yazılabilir bir `v4l2loopback` aygıtı
+  varsa URDP onu kullanır (başka bir programın sanal kamerasını değil) ve
   kamerayı her program görür. Yoksa URDP bir PipeWire kamerası yapar; onu
   PipeWire kullanan programlar görür (OBS, Firefox, KDE'nin kendi
   programları), diğerleri görmez. Modülü yüklemek için (root olarak; ikinci

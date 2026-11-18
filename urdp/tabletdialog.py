@@ -25,6 +25,20 @@ def shared() -> tablet.TabletScreen:
     return _screen
 
 
+def recover() -> None:
+    """At start: give back the default speaker and microphone a URDP that
+    crashed while sharing left as ours (in the background: pactl is slow)."""
+    import threading
+
+    from . import tabletmic
+
+    def run() -> None:
+        tabletaudio.recover()
+        tabletmic.recover()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def shutdown() -> None:
     if _screen is not None:
         _screen.stop()
