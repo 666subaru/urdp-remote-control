@@ -31,9 +31,9 @@ arayüzdür.** FreeRDP kurulu değilse hiçbir şey yapamaz, o yüzden ilk şart
 | **FreeRDP 3** (`xfreerdp3`) | Bağlantıyı asıl kuran program | **Evet** |
 | **PyQt6** | Arayüz | **Evet** |
 | `libsecret` (`secret-tool`) | Parolayı KDE Cüzdan / GNOME Keyring'de saklamak | Hayır, ama parola kaydetme onsuz çalışmaz |
-| `krfb` (`krfb-virtualmonitor`) | Tablet ekranı (yalnız KDE Plasma Wayland) | Hayır |
-| `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | Tablet ekranı sesi | Hayır |
-| GStreamer (`gst-launch-1.0`, PipeWire eklentisi; VA-API eklentileri isteğe bağlı) | Tablet ekranı hızlı görüntü | Hayır |
+| `krfb` (`krfb-virtualmonitor`) | İkinci ekran (yalnız KDE Plasma Wayland) | Hayır |
+| `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | İkinci ekran sesi | Hayır |
+| GStreamer (`gst-launch-1.0`, PipeWire eklentisi; VA-API eklentileri isteğe bağlı) | İkinci ekran hızlı görüntü | Hayır |
 
 FreeRDP **3** gerekiyor. FreeRDP 2 birçok seçeneği farklı yazar
 (`/cert-tofu`, `/monitor-list` gibi); uygulama eski bir sürüm bulursa durum
@@ -159,9 +159,9 @@ Beş sekmedeki her mstsc seçeneğinin karşılığı vardır. Ek olarak:
 Karşılığı olmayan tek şey mstsc'nin "Uzak bilgisayarda oturum açmak için bir web
 hesabı kullan" seçeneğidir; FreeRDP'nin Azure AD/Entra akışı farklı çalışır.
 
-## Tablet ekranı — tablet ya da telefon ek monitör olarak
+## İkinci ekran — tablet ya da telefon ek monitör olarak
 
-KDE Plasma'da (Wayland) alt çubuktaki **Tablet Ekranı**, aynı ağdaki bir tableti
+KDE Plasma'da (Wayland) alt çubuktaki **İkinci Ekran**, aynı ağdaki bir tableti
 ya da telefonu bu bilgisayarın bir monitörü yapar: pencereler ona her ekrana
 olduğu gibi taşınır, dokunma ve kalem fare olarak çalışır. Tablette yalnızca
 tarayıcı gerekir: QR kodu kamerasıyla okutun ya da adresi açıp kodu yazın.
@@ -329,7 +329,7 @@ Kod düzeni:
 | `theme.py` / `widgets.py` | Karanlık tema ve ortak parçalar |
 | `tab_*.py` | Beş sekme |
 | `mainwindow.py` | Pencere, profil yönetimi, bağlanma akışı |
-| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `web/` | Tablet ekranı: sanal ekran, web sunucusu, ses, hızlı görüntü, sayfa |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `web/` | İkinci ekran: sanal ekran, web sunucusu, ses, hızlı görüntü, sayfa |
 | `qr.py` | Tablet adresi için küçük QR üreticisi |
 
 ## Lisans

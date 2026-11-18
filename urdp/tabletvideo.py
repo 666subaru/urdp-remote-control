@@ -30,6 +30,7 @@ PORTAL = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 BOUNDARY = b"urdpframe"
 QUALITY = 80
+MAX_FRAME = 32 * 1024 * 1024
 _SOURCE_MONITOR, _CURSOR_EMBEDDED, _PERSIST_ALWAYS = 1, 2, 2
 
 _checked: dict[str, bool] = {}
@@ -90,6 +91,9 @@ class FrameReader:
             except ValueError:
                 self.buffer = self.buffer[end + 4:]
                 continue
+            if not 0 < size <= MAX_FRAME:           # not from multipartmux
+                self.buffer = b""
+                break
             start = end + 4
             if len(self.buffer) < start + size:
                 break
@@ -165,11 +169,16 @@ class Capture(QObject):
         self.bus.disconnect(PORTAL, message.path(),
                             "org.freedesktop.portal.Request", "Response",
                             self._response)
-        if then is None or not self.running:
-            return
         arguments = message.arguments()
         code = arguments[0] if arguments else 2
         results = arguments[1] if len(arguments) > 1 else {}
+        if then is None or not self.running:
+            # Stopped while the portal answered: close what it opened.
+            late = results.get("session_handle") if isinstance(results, dict) else None
+            if late and late != self.session:
+                QDBusInterface(PORTAL, str(late), "org.freedesktop.portal.Session",
+                               self.bus).call("Close")
+            return
         then(int(code), results if isinstance(results, dict) else {})
 
     def _created(self, code: int, results: dict) -> None:
@@ -197,21 +206,23 @@ class Capture(QObject):
         if code != 0:
             self._fail("" if code == 1 else "Start")
             return
-        token = results.get("restore_token")
-        if isinstance(token, str) and token:
-            self.token.emit(token)
         streams = results.get("streams") or []
         node = 0
         for stream in streams:
             try:
-                ident, props = stream[0], stream[1]
-            except (TypeError, IndexError, KeyError):
+                ident, props = int(stream[0]), stream[1]
+            except (TypeError, ValueError, IndexError, KeyError):
                 continue
             if isinstance(props, dict) and props.get("mapping_id") == self.output:
-                node = int(ident)
-        if not node:
+                node = ident
+        if node <= 0:
             self._fail("wrong screen")
             return
+        # Kept only for the right screen: the desktop restores the choice
+        # without asking.
+        token = results.get("restore_token")
+        if isinstance(token, str) and token:
+            self.token.emit(token)
         self.node = node
         self._tries = []
         self._launch()
@@ -261,6 +272,8 @@ class Capture(QObject):
                 break
             if not data:
                 break
+            if process is not self._process:
+                break                         # stopped: drop what is left
             for frame in reader.feed(data):
                 if not self._got_frame:
                     self._got_frame = True
@@ -301,4 +314,7 @@ class Capture(QObject):
                            "org.freedesktop.portal.Session",
                            self.bus).call("Close")
             self.session = ""
+        for path in self._waiting:
+            self.bus.disconnect(PORTAL, path, "org.freedesktop.portal.Request",
+                                "Response", self._response)
         self._waiting.clear()

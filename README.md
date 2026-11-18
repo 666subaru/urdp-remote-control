@@ -32,9 +32,9 @@ FreeRDP.** Without FreeRDP it can do nothing, so that is the first requirement.
 | **FreeRDP 3** (`xfreerdp3`) | Makes the actual connection | **Yes** |
 | **PyQt6** | The interface | **Yes** |
 | `libsecret` (`secret-tool`) | Stores passwords in KDE Wallet / GNOME Keyring | No, but password saving needs it |
-| `krfb` (`krfb-virtualmonitor`) | Tablet screen (KDE Plasma Wayland only) | No |
-| `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | Tablet screen sound | No |
-| GStreamer (`gst-launch-1.0`, PipeWire plugin; VA-API plugins optional) | Tablet screen fast picture | No |
+| `krfb` (`krfb-virtualmonitor`) | Second screen (KDE Plasma Wayland only) | No |
+| `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | Second screen sound | No |
+| GStreamer (`gst-launch-1.0`, PipeWire plugin; VA-API plugins optional) | Second screen fast picture | No |
 
 FreeRDP **3** is required. FreeRDP 2 spells many options differently
 (`/cert-tofu`, `/monitor-list`); if an older version is found, the application
@@ -161,9 +161,9 @@ Every option from mstsc's five tabs has a counterpart. On top of that:
 The one thing with no counterpart is mstsc's "Use a web account to sign in to
 the remote computer"; FreeRDP's Entra ID flow works differently.
 
-## Tablet screen — a tablet or phone as an extra monitor
+## Second screen — a tablet or phone as an extra monitor
 
-On KDE Plasma (Wayland), **Tablet Screen** in the bottom bar turns a tablet or
+On KDE Plasma (Wayland), **Second Screen** in the bottom bar turns a tablet or
 phone on the same network into another monitor of this computer — windows
 move onto it like onto any screen, and touch and pen work as the mouse. The
 tablet needs only its browser: scan the QR code with its camera, or open the
@@ -332,7 +332,7 @@ integrity, and the tablet screen's sizing, layout, QR codes and web bridge.
 | `theme.py`, `widgets.py` | Dark theme and shared pieces |
 | `tab_*.py` | The five tabs |
 | `mainwindow.py` | Window, profile management, connect flow |
-| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `web/` | Tablet screen: virtual screen, web server, sound, fast picture, page |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `tabletvideo.py`, `web/` | Second screen: virtual screen, web server, sound, fast picture, page |
 | `qr.py` | Small QR encoder for the tablet address |
 
 ## Licence

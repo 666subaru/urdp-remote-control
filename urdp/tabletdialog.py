@@ -49,7 +49,7 @@ class TabletDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.screen_ = shared()
-        self.setWindowTitle(_("Tablet Screen"))
+        self.setWindowTitle(_("Second Screen"))
         self.addresses = tablet.addresses()
 
         layout = QVBoxLayout(self)
@@ -110,6 +110,7 @@ class TabletDialog(QDialog):
         self.warning = hint("")
         layout.addWidget(self.warning)
         self.picture_note = hint("")
+        self.picture_note.setTextFormat(Qt.TextFormat.PlainText)
         self.picture_note.setVisible(False)
         layout.addWidget(self.picture_note)
         layout.addWidget(hint(_("Sharing continues while URDP is open.")))

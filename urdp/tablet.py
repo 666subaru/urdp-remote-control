@@ -567,7 +567,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = url.path
         if path == "/":
             path = "/tablet.html"
-        if path in ("/nonce", "/hello", "/ws", "/input") and not self._same_site():
+        if (path in ("/nonce", "/hello", "/ws", "/input", "/audio", "/video")
+                and not self._same_site()):
             self._send(403, b"forbidden", "text/plain")
         elif path == "/nonce":
             self._json({"nonce": self.server.owner.new_nonce(),
@@ -644,17 +645,20 @@ class _Handler(BaseHTTPRequestHandler):
                       password=seal(owner.key(), nonce, owner.vnc_password))
         self._json(answer)
 
-    def _may_upgrade(self, query: dict, use: str) -> bool:
+    def _may_upgrade(self, query: dict, use: str) -> int:
+        """The ticket's generation (see TabletScreen.use_ticket), or 0 after
+        answering the refusal."""
         if (self.headers.get("Upgrade", "").lower() != "websocket"
                 or not self.headers.get("Sec-WebSocket-Key")):
             self._send(400, b"websocket expected", "text/plain")
-            return False
+            return 0
         ticket = (query.get("t") or [""])[0]
-        if not self.server.owner.use_ticket(ticket, use,
-                                            self.client_address[0]):
+        epoch = self.server.owner.use_ticket(ticket, use,
+                                             self.client_address[0])
+        if not epoch:
             self._send(403, b"forbidden", "text/plain")
-            return False
-        return True
+            return 0
+        return epoch
 
     def _upgrade(self) -> None:
         self.send_response(101)
@@ -692,14 +696,18 @@ class _Handler(BaseHTTPRequestHandler):
         """The screen as JPEGs, one binary message each, newest only: a
         tablet that cannot keep up gets fewer frames, not older ones."""
         owner = self.server.owner
-        if not self._may_upgrade(query, "video"):
+        epoch = self._may_upgrade(query, "video")
+        if not epoch:
             return
         if not owner.has_video:
             self._send(503, b"no fast picture", "text/plain")
             return
         self._upgrade()
         bridge = _Bridge(self.connection, self.rfile)
-        frames = owner.video_opened(bridge)
+        frames = owner.video_opened(bridge, epoch)
+        if frames is None:                  # shut out while it connected
+            bridge.close()
+            return
         owner.bridge_opened(bridge, self.client_address[0])
         threading.Thread(target=bridge.run, daemon=True).start()
         try:
@@ -719,14 +727,18 @@ class _Handler(BaseHTTPRequestHandler):
         page sends nothing but close and ping, which the bridge reads in a
         thread of its own while this one sends."""
         owner = self.server.owner
-        if not self._may_upgrade(query, "audio"):
+        epoch = self._may_upgrade(query, "audio")
+        if not epoch:
             return
         if not owner.has_audio:
             self._send(503, b"no sound", "text/plain")
             return
         self._upgrade()
         bridge = _Bridge(self.connection, self.rfile)
-        pieces = owner.audio_opened(bridge)
+        pieces = owner.audio_opened(bridge, epoch)
+        if pieces is None:                  # shut out while it connected
+            bridge.close()
+            return
         threading.Thread(target=bridge.run, daemon=True).start()
         try:
             while not bridge.closed.is_set():
@@ -861,6 +873,9 @@ class TabletScreen(QObject):
         self._video: tuple[_Bridge, _Latest] | None = None
         self._video_ready = False
         self._last_frame = b""
+        #: Moves on with Stop and New Code; tickets carry the one they were
+        #: given in, so a connection racing either is turned away.
+        self._epoch = 1
         self._layout_tries = 0
         self._layout_timer = QTimer(self)
         self._layout_timer.setInterval(250)
@@ -918,6 +933,7 @@ class TabletScreen(QObject):
             threading.Thread(target=server.shutdown, daemon=True).start()
             server.server_close()
         with self._lock:
+            self._epoch += 1
             bridges, self._bridges = self._bridges, []
         for bridge in bridges:
             bridge.close()
@@ -937,9 +953,14 @@ class TabletScreen(QObject):
             self._key = None
             self._nonces.clear()
             self._tickets.clear()
+            self._epoch += 1
             bridges, self._bridges = self._bridges, []
-            if self._input_bridge is not None:
-                bridges.append(self._input_bridge)
+            for channel in (self._input_bridge,
+                            self._audio and self._audio[0],
+                            self._video and self._video[0]):
+                if channel is not None:
+                    bridges.append(channel)
+            self._audio = self._video = None
         for bridge in bridges:
             bridge.close()
         if self.running:
@@ -1053,17 +1074,19 @@ class TabletScreen(QObject):
         self._capture.start("Virtual-" + OUTPUT, self.settings.video_token)
 
     def _stop_video(self) -> None:
-        self._video_ready = False
-        self._last_frame = b""
+        with self._lock:
+            self._video_ready = False
         if self._capture is not None:
             self._capture.stop()
+        self._last_frame = b""
         with self._lock:
             video, self._video = self._video, None
         if video is not None:
             video[0].close()
 
     def _video_started(self) -> None:
-        self._video_ready = True
+        with self._lock:
+            self._video_ready = True
         self.notice.emit("")
         # A page showing the VNC picture reconnects and gets this one.
         with self._lock:
@@ -1072,7 +1095,12 @@ class TabletScreen(QObject):
             bridge.close()
 
     def _video_failed(self, reason: str) -> None:
-        was_ready, self._video_ready = self._video_ready, False
+        with self._lock:
+            was_ready, self._video_ready = self._video_ready, False
+        if reason == "wrong screen" and self.settings.video_token:
+            # The desktop would restore that choice silently every time.
+            self.settings.video_token = ""
+            save_settings(self.settings)
         if not self.running:
             return
         if reason == "":
@@ -1097,9 +1125,13 @@ class TabletScreen(QObject):
             self.settings.video_token = token
             save_settings(self.settings)
 
-    def video_opened(self, bridge: _Bridge) -> _Latest:
+    def video_opened(self, bridge: _Bridge, epoch: int) -> _Latest | None:
+        """The slot the new listener's frames go into, or None when its
+        ticket is from before a Stop or New Code."""
         frames = _Latest(self._last_frame)
         with self._lock:
+            if epoch != self._epoch or not self._video_ready:
+                return None
             old, self._video = self._video, (bridge, frames)
         if old is not None:
             old[0].close()
@@ -1154,11 +1186,15 @@ class TabletScreen(QObject):
         if speaker is not None:
             speaker.stop()
 
-    def audio_opened(self, bridge: _Bridge) -> queue.Queue:
+    def audio_opened(self, bridge: _Bridge,
+                     epoch: int) -> queue.Queue | None:
         """The queue the new listener's pieces go into; one listener at a
-        time, the newest."""
+        time, the newest.  None when its ticket is from before a Stop or
+        New Code."""
         pieces: queue.Queue = queue.Queue(maxsize=20)      # 200 ms at most
         with self._lock:
+            if epoch != self._epoch:
+                return None
             old, self._audio = self._audio, (bridge, pieces)
         if old is not None:
             old[0].close()
@@ -1243,17 +1279,19 @@ class TabletScreen(QObject):
                 del self._tickets[old]
             while len(self._tickets) >= 64:
                 del self._tickets[next(iter(self._tickets))]
-            self._tickets[ticket] = (address, now + TICKET_LIFE, set())
+            self._tickets[ticket] = (address, now + TICKET_LIFE, set(),
+                                     self._epoch)
         return ticket
 
-    def use_ticket(self, ticket: str, use: str, address: str) -> bool:
+    def use_ticket(self, ticket: str, use: str, address: str) -> int:
+        """The generation the ticket was given in, or 0 when it is no good."""
         with self._lock:
             entry = self._tickets.get(ticket)
             if (entry is None or entry[0] != address
                     or entry[1] < time.monotonic() or use in entry[2]):
-                return False
+                return 0
             entry[2].add(use)
-            return True
+            return entry[3]
 
     def tablet_seen(self, width: float, height: float, ratio: float) -> bool:
         """Remember the tablet; True when the screen restarts to match it."""

@@ -203,7 +203,9 @@ class _Owner:
         self._audio = None
         self.has_video = True
         self._video = None
+        self._video_ready = True
         self._last_frame = b""
+        self._epoch = 1
         self.messages = []
         self.inputs = []
 
@@ -468,6 +470,18 @@ class ServerTest(unittest.TestCase):
         sock.sendall(bytes([0x88, 0x80]) + b"\0\0\0\0")
         sock.close()
 
+    def test_channels_from_before_new_code_are_turned_away(self):
+        bridge = unittest.mock.Mock()
+        self.assertIsNotNone(self.owner.video_opened(bridge, 1))
+        self.assertIsNotNone(self.owner.audio_opened(bridge, 1))
+        self.owner._epoch = 2                       # New Code or Stop
+        self.assertIsNone(self.owner.video_opened(bridge, 1))
+        self.assertIsNone(self.owner.audio_opened(bridge, 1))
+        ticket = self.owner.new_ticket("10.0.0.5")
+        self.assertEqual(self.owner.use_ticket(ticket, "video", "10.0.0.5"), 2)
+        self.owner._video_ready = False             # picture stopped
+        self.assertIsNone(self.owner.video_opened(bridge, 2))
+
     def test_video_needs_the_fast_picture(self):
         self.owner.has_video = False
         sock, _, head = self._handshake(self._ticket(), "/video")
@@ -505,6 +519,14 @@ class VideoTest(unittest.TestCase):
                 got += reader.feed(stream[i:i + step])
             self.assertEqual(got, [b"\xff\xd8one", b"\xff\xd8two\r\n\r\nxx"])
 
+    def test_a_bad_length_does_not_hang(self):
+        from urdp import tabletvideo
+        reader = tabletvideo.FrameReader()
+        for length in (b"-24", b"0", b"999999999999"):
+            self.assertEqual(reader.feed(
+                b"--x\r\nContent-Length: " + length + b"\r\n\r\nabc"), [])
+            self.assertEqual(reader.buffer, b"")
+
     def test_newest_frame_only(self):
         latest = tablet._Latest(b"a")
         latest.put(b"b")
@@ -526,6 +548,42 @@ class VideoTest(unittest.TestCase):
         with unittest.mock.patch.object(tabletvideo, "_has_element",
                                         side_effect=lambda e: e != "vajpegenc"):
             self.assertEqual(len(tabletvideo.pipelines(7, 42)), 1)
+
+
+class VideoStateTest(unittest.TestCase):
+    def _screen(self, tmp):
+        from PyQt6.QtCore import QCoreApplication
+        _app = QCoreApplication.instance() or QCoreApplication([])
+        return tablet.TabletScreen()
+
+    def test_wrong_screen_forgets_the_choice(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}):
+            screen = self._screen(tmp)
+            screen.settings.video_token = "tok"
+            notices = []
+            screen.notice.connect(notices.append)
+            screen._server = object()
+            screen._video_failed("wrong screen")
+            self.assertEqual(tablet.load_settings().video_token, "")
+            self.assertIn("URDP-Tablet", notices[-1])
+            screen._server = None
+
+    def test_new_code_closes_every_channel(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}):
+            screen = self._screen(tmp)
+            channels = [unittest.mock.Mock() for _ in range(4)]
+            screen._bridges = [channels[0]]
+            screen._input_bridge = channels[1]
+            screen._audio = (channels[2], None)
+            screen._video = (channels[3], None)
+            epoch = screen._epoch
+            screen.new_code()
+            for channel in channels:
+                channel.close.assert_called()
+            self.assertEqual((screen._audio, screen._video), (None, None))
+            self.assertEqual(screen._epoch, epoch + 1)
 
 
 class SpeakerTest(unittest.TestCase):

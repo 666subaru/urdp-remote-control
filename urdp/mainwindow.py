@@ -313,7 +313,7 @@ class MainWindow(QMainWindow):
         bar_layout.addWidget(self.language)
         bar_layout.addStretch(1)
 
-        self.btn_tablet = QPushButton(_("Tablet Screen"))
+        self.btn_tablet = QPushButton(_("Second Screen"))
         self.btn_tablet.setToolTip(_(
             "Use a tablet or phone on the same network as an extra screen. "
             "Scan the code with its camera, or open the address in its "
