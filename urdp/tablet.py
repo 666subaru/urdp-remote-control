@@ -677,7 +677,7 @@ class _Handler(BaseHTTPRequestHandler):
             owner.input_closed(bridge)
 
     def _audio(self, query: dict) -> None:
-        """The computer's sound, one binary message per 20 ms piece.  The
+        """The computer's sound, one binary message per 10 ms piece.  The
         page sends nothing but close and ping, which the bridge reads in a
         thread of its own while this one sends."""
         owner = self.server.owner
@@ -1012,7 +1012,7 @@ class TabletScreen(QObject):
     def audio_opened(self, bridge: _Bridge) -> queue.Queue:
         """The queue the new listener's pieces go into; one listener at a
         time, the newest."""
-        pieces: queue.Queue = queue.Queue(maxsize=15)      # 300 ms at most
+        pieces: queue.Queue = queue.Queue(maxsize=20)      # 200 ms at most
         with self._lock:
             old, self._audio = self._audio, (bridge, pieces)
         if old is not None:

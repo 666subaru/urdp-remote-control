@@ -424,7 +424,7 @@ class ServerTest(unittest.TestCase):
             if self.owner._audio is not None:
                 break
             threading.Event().wait(0.02)
-        piece = bytes(range(256)) * 15                  # 20 ms, 3840 bytes
+        piece = bytes(range(256)) * 15                  # 3840 bytes
         self.owner._audio_out(piece)
         first, length = sock.recv(2)
         self.assertEqual((first, length), (0x82, 126))

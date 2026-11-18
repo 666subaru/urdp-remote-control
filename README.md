@@ -195,7 +195,7 @@ reachable from the network.
 - **Sound.** With **Sound: On the tablet**, URDP adds a "URDP Tablet"
   speaker (a PipeWire/PulseAudio null sink, via `pactl` and `parec`) and
   makes it the default output while sharing runs; the tablet plays what it
-  gets (48 kHz stereo, about a tenth of a second behind). Browsers start
+  gets (48 kHz stereo, under a tenth of a second behind on a good network). Browsers start
   sound only after a touch. When sharing stops, the previous output is the
   default again. A program can still be sent elsewhere in the desktop's
   sound settings.

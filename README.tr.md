@@ -191,7 +191,7 @@ gereken **tek bir port** vardır (varsayılan 1701).
 - **Ses.** **Ses: Tablette** seçiliyken URDP bir "URDP Tablet" hoparlörü
   ekler (`pactl` ve `parec` ile PipeWire/PulseAudio boş çıkışı) ve paylaşım
   sürdükçe onu varsayılan çıkış yapar; tablet gelen sesi çalar (48 kHz
-  stereo, saniyenin onda biri kadar geriden). Tarayıcılar sesi ancak bir
+  stereo, iyi bir ağda saniyenin onda birinden az geriden). Tarayıcılar sesi ancak bir
   dokunuştan sonra başlatır. Paylaşım durunca önceki çıkış yeniden varsayılan
   olur. Bir program masaüstünün ses ayarlarından yine başka çıkışa
   yönlendirilebilir.

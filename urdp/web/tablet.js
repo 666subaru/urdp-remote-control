@@ -168,16 +168,23 @@ function openInput(ticket) {
 }
 
 // ------------------------------------------------------------------ sound
-// The computer's sound arrives as 20 ms pieces of 48 kHz 16-bit stereo.
-// Each is scheduled right after the one before; a small cushion absorbs
-// Wi-Fi jitter, and when pieces pile up the late ones are dropped, so the
-// sound never falls far behind the picture.  (AudioWorklet would be
-// smoother but needs HTTPS.)  Browsers start sound only after a touch.
+// The computer's sound arrives as 10 ms pieces of 48 kHz 16-bit stereo.
+// Each is scheduled right after the one before, behind a cushion that
+// absorbs Wi-Fi jitter.  The cushion adapts: it starts small, grows a step
+// each time the sound runs dry, and shrinks back after a calm spell.  When
+// pieces pile up past it, they are dropped, so the sound never falls behind
+// the picture.  (AudioWorklet would be smoother but needs HTTPS.)  Browsers
+// start sound only after a touch.
 const RATE = 48000;
-const CUSHION = 0.06, MAX_AHEAD = 0.25;      // seconds
+const MIN_CUSHION = 0.03, MAX_CUSHION = 0.2, STEP = 0.02;   // seconds
+const SLACK = 0.05;              // tolerated above the cushion before dropping
+const PAUSE = 0.1;               // a gap this long is silence, not a hiccup
+const CALM = 10;                 // seconds without a hiccup before shrinking
 let audioSock = null;
 let audioCtx = null;
 let audioAt = 0;
+let cushion = MIN_CUSHION;
+let calmSince = 0;
 
 function openAudio(ticket) {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -204,8 +211,18 @@ function playPiece(data) {
   const frames = pcm.length >> 1;
   if (!frames) return;
   const now = audioCtx.currentTime;
-  if (audioAt < now + 0.005) audioAt = now + CUSHION;   // ran dry: refill
-  else if (audioAt > now + MAX_AHEAD) return;           // too far behind
+  if (audioAt < now + 0.002) {
+    // Ran dry.  Right after sound (not after a pause, when the computer
+    // sends nothing) that was a hiccup: keep a bigger cushion from now on.
+    if (audioAt > now - PAUSE) cushion = Math.min(MAX_CUSHION, cushion + STEP);
+    audioAt = now + cushion;
+    calmSince = now;
+  } else if (audioAt > now + cushion + SLACK) {
+    return;                                       // piled up: catch up
+  } else if (now - calmSince > CALM && cushion > MIN_CUSHION) {
+    cushion = Math.max(MIN_CUSHION, cushion - 0.01);
+    calmSince = now;
+  }
   const buffer = audioCtx.createBuffer(2, frames, RATE);
   const left = buffer.getChannelData(0), right = buffer.getChannelData(1);
   for (let i = 0; i < frames; i++) {

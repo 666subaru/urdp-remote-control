@@ -4,7 +4,7 @@ tablet.
 While sharing runs, a PipeWire/PulseAudio null sink named "URDP Tablet" is the
 default output, so programs play into it (the desktop's own sound settings
 can still send a program elsewhere).  ``parec`` records what it gets as
-48 kHz 16-bit stereo, and every 20 ms piece goes to the tablet over a
+48 kHz 16-bit stereo, and every 10 ms piece goes to the tablet over a
 WebSocket.  When sharing stops, the previous default output comes back.
 """
 
@@ -19,7 +19,7 @@ from collections.abc import Callable
 SINK = "urdp_tablet"
 DESCRIPTION = "URDP Tablet"
 RATE, CHANNELS = 48000, 2
-CHUNK = RATE // 50 * CHANNELS * 2           # 20 ms of s16le
+CHUNK = RATE // 100 * CHANNELS * 2          # 10 ms of s16le
 
 
 def available() -> bool:
@@ -77,7 +77,7 @@ class Speaker:
             self._process = subprocess.Popen(
                 ["parec", "-d", f"{SINK}.monitor", "--format=s16le",
                  f"--rate={RATE}", f"--channels={CHANNELS}",
-                 "--latency-msec=20", "--raw"],
+                 "--latency-msec=10", "--raw"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except OSError:
             self.stop()
