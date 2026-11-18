@@ -33,6 +33,7 @@ FreeRDP.** Without FreeRDP it can do nothing, so that is the first requirement.
 | **PyQt6** | The interface | **Yes** |
 | `libsecret` (`secret-tool`) | Stores passwords in KDE Wallet / GNOME Keyring | No, but password saving needs it |
 | `krfb` (`krfb-virtualmonitor`) | Tablet screen (KDE Plasma Wayland only) | No |
+| `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | Tablet screen sound | No |
 
 FreeRDP **3** is required. FreeRDP 2 spells many options differently
 (`/cert-tofu`, `/monitor-list`); if an older version is found, the application
@@ -191,6 +192,13 @@ reachable from the network.
   key using that layout (xkbcommon).
   `krfb-virtualmonitor` itself drops VNC input, so without uinput the tablet
   is view-only.
+- **Sound.** With **Sound: On the tablet**, URDP adds a "URDP Tablet"
+  speaker (a PipeWire/PulseAudio null sink, via `pactl` and `parec`) and
+  makes it the default output while sharing runs; the tablet plays what it
+  gets (48 kHz stereo, about a tenth of a second behind). Browsers start
+  sound only after a touch. When sharing stops, the previous output is the
+  default again. A program can still be sent elsewhere in the desktop's
+  sound settings.
 - **Screen stays on.** The page plays a tiny silent video behind the picture,
   which keeps Android from dimming the tablet (the Wake Lock API needs HTTPS).
 - **Access.** Everything but the page files needs the code, which travels in
@@ -315,7 +323,7 @@ integrity, and the tablet screen's sizing, layout, QR codes and web bridge.
 | `theme.py`, `widgets.py` | Dark theme and shared pieces |
 | `tab_*.py` | The five tabs |
 | `mainwindow.py` | Window, profile management, connect flow |
-| `tablet.py`, `tabletdialog.py`, `web/` | Tablet screen: virtual screen, web server, page |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `web/` | Tablet screen: virtual screen, web server, sound, page |
 | `qr.py` | Small QR encoder for the tablet address |
 
 ## Licence

@@ -11,8 +11,9 @@ server, so the tablet needs nothing but its browser:
   proves the page knows the access code, and gives it a short-lived ticket
   and the VNC password; it also learns the tablet's screen size, so the
   virtual screen can match it.
-* ``/ws`` is a WebSocket bridged to the VNC server on this machine, and
-  ``/input`` one that carries touch, pen and keys; both want a ticket.
+* ``/ws`` is a WebSocket bridged to the VNC server on this machine,
+  ``/input`` one that carries touch, pen and keys, and ``/audio`` one that
+  brings the computer's sound (``tabletaudio``); each wants a ticket.
 
 The access code travels in the URL fragment of the address the QR code holds,
 which browsers never send to a server or put in a Referer; the page keeps it
@@ -32,6 +33,7 @@ import ipaddress
 import json
 import math
 import os
+import queue
 import secrets
 import shutil
 import socket
@@ -50,7 +52,7 @@ from urllib.parse import parse_qs, urlsplit
 from PyQt6.QtCore import (QObject, QProcess, QProcessEnvironment, QTimer,
                           pyqtSignal)
 
-from . import uinput
+from . import tabletaudio, uinput
 from .i18n import gettext as _
 from .store import config_dir
 
@@ -79,6 +81,8 @@ SIZES = [("sharp", "Match the tablet (sharp)"),
 #: How touch and pen reach the computer.
 INPUTS = [("mouse", "As a mouse (works in every program)"),
           ("tablet", "As touch and pen (pressure, gestures)")]
+#: Where the computer's sound plays while sharing runs.
+SOUNDS = [("computer", "On the computer"), ("tablet", "On the tablet")]
 #: The sizes that follow the tablet (their labels are translated).
 FOLLOW = ("sharp", "light")
 
@@ -99,6 +103,8 @@ class Settings:
     size: str = "sharp"
     #: "mouse" (pen and touch act as a mouse) or "tablet" (real devices)
     input: str = "mouse"
+    #: "computer" or "tablet" (see SOUNDS)
+    sound: str = "computer"
     code: str = ""
     #: The last tablet seen, in CSS pixels, so the next start can match it.
     tablet_width: int = 0
@@ -131,6 +137,8 @@ def load_settings() -> Settings:
         settings.size = "sharp"
     if settings.input not in dict(INPUTS):
         settings.input = "mouse"
+    if settings.sound not in dict(SOUNDS):
+        settings.sound = "computer"
     if not 1024 <= settings.port <= 65535:
         settings.port = DEFAULT_PORT
     if not (200 <= settings.tablet_width <= 8192
@@ -386,6 +394,7 @@ def page_strings() -> dict[str, str]:
             "code": _("Enter the code shown in URDP on the computer."),
             "wrong": _("Wrong code"),
             "wait": _("Too many wrong codes; wait a minute and try again."),
+            "sound": _("Touch the screen to turn on the sound."),
             "connect": _("Connect"),
             "fullscreen": _("Full Screen")}
 
@@ -549,6 +558,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._websocket(query)
         elif path == "/input":
             self._input(query)
+        elif path == "/audio":
+            self._audio(query)
         else:
             self._static(path)
 
@@ -602,6 +613,7 @@ class _Handler(BaseHTTPRequestHandler):
             w = h = ratio = 0.0
         restart = owner.tablet_seen(w, h, ratio)
         answer.update(ok=True, restart=restart, input=owner.has_input,
+                      audio=owner.has_audio,
                       ticket=owner.new_ticket(self.client_address[0]),
                       password=seal(owner.key(), nonce, owner.vnc_password))
         self._json(answer)
@@ -649,6 +661,33 @@ class _Handler(BaseHTTPRequestHandler):
             bridge.run()
         finally:
             owner.input_closed(bridge)
+
+    def _audio(self, query: dict) -> None:
+        """The computer's sound, one binary message per 20 ms piece.  The
+        page sends nothing but close and ping, which the bridge reads in a
+        thread of its own while this one sends."""
+        owner = self.server.owner
+        if not self._may_upgrade(query, "audio"):
+            return
+        if not owner.has_audio:
+            self._send(503, b"no sound", "text/plain")
+            return
+        self._upgrade()
+        bridge = _Bridge(self.connection, self.rfile)
+        pieces = owner.audio_opened(bridge)
+        threading.Thread(target=bridge.run, daemon=True).start()
+        try:
+            while not bridge.closed.is_set():
+                try:
+                    piece = pieces.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                bridge.send(0x2, piece)
+        except OSError:
+            pass
+        finally:
+            bridge.close()
+            owner.audio_closed(bridge)
 
     def _websocket(self, query: dict) -> None:
         owner = self.server.owner
@@ -742,6 +781,8 @@ class TabletScreen(QObject):
         self._input: uinput.TabletInput | None = None
         self._input_bridge: _Bridge | None = None
         self._input_lock = threading.Lock()
+        self._speaker: tabletaudio.Speaker | None = None
+        self._audio: tuple[_Bridge, queue.Queue] | None = None
         self._layout_tries = 0
         self._layout_timer = QTimer(self)
         self._layout_timer.setInterval(250)
@@ -786,6 +827,9 @@ class TabletScreen(QObject):
         threading.Thread(target=self._server.serve_forever,
                          daemon=True).start()
         self._open_input()
+        if self.settings.sound == "tablet":
+            speaker = tabletaudio.Speaker(self._audio_out)
+            self._speaker = speaker if speaker.start() else None
         self._set_state("starting")
         s = self.settings
         self._start_monitor(geometry(s.size, s.tablet_width, s.tablet_height,
@@ -801,6 +845,7 @@ class TabletScreen(QObject):
         for bridge in bridges:
             bridge.close()
         self._close_input()
+        self._close_audio()
         self._stop_monitor()
         self._client_address = ""
         self._set_state("stopped")
@@ -914,6 +959,45 @@ class TabletScreen(QObject):
         except (ValueError, TypeError, IndexError, KeyError, OSError,
                 OverflowError, RecursionError):
             pass
+
+    # ------------------------------------------------------------- sound
+    @property
+    def has_audio(self) -> bool:
+        return self._speaker is not None
+
+    def _close_audio(self) -> None:
+        with self._lock:
+            audio, self._audio = self._audio, None
+        if audio is not None:
+            audio[0].close()
+        speaker, self._speaker = self._speaker, None
+        if speaker is not None:
+            speaker.stop()
+
+    def audio_opened(self, bridge: _Bridge) -> queue.Queue:
+        """The queue the new listener's pieces go into; one listener at a
+        time, the newest."""
+        pieces: queue.Queue = queue.Queue(maxsize=15)      # 300 ms at most
+        with self._lock:
+            old, self._audio = self._audio, (bridge, pieces)
+        if old is not None:
+            old[0].close()
+        return pieces
+
+    def audio_closed(self, bridge: _Bridge) -> None:
+        with self._lock:
+            if self._audio is not None and self._audio[0] is bridge:
+                self._audio = None
+
+    def _audio_out(self, piece: bytes) -> None:
+        """From the recorder's thread: a piece of sound for the tablet; a
+        tablet that cannot keep up loses pieces instead of falling behind."""
+        audio = self._audio
+        if audio is not None:
+            try:
+                audio[1].put_nowait(piece)
+            except queue.Full:
+                pass
 
     # ------------------------------------------- called from web threads
     def key(self) -> bytes:

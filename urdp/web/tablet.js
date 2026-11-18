@@ -139,6 +139,7 @@ async function connect() {
   rfb.addEventListener('connect', () => {
     failures = 0;
     if (answer.input) openInput(ticket);
+    if (answer.audio) openAudio(ticket);
     document.body.classList.add('live');
     status(text('connected', 'Connected'));
     updateChrome();
@@ -146,6 +147,7 @@ async function connect() {
   rfb.addEventListener('disconnect', () => {
     rfb = null;
     if (inputSock) inputSock.close();
+    if (audioSock) audioSock.close();
     document.body.classList.remove('live');
     updateChrome();
     retryLater();
@@ -163,6 +165,70 @@ function openInput(ticket) {
   sock.addEventListener('open', () => { inputSock = sock; updateChrome(); });
   sock.addEventListener('close', () => { if (inputSock === sock) inputSock = null; });
   sock.addEventListener('error', () => sock.close());
+}
+
+// ------------------------------------------------------------------ sound
+// The computer's sound arrives as 20 ms pieces of 48 kHz 16-bit stereo.
+// Each is scheduled right after the one before; a small cushion absorbs
+// Wi-Fi jitter, and when pieces pile up the late ones are dropped, so the
+// sound never falls far behind the picture.  (AudioWorklet would be
+// smoother but needs HTTPS.)  Browsers start sound only after a touch.
+const RATE = 48000;
+const CUSHION = 0.06, MAX_AHEAD = 0.25;      // seconds
+let audioSock = null;
+let audioCtx = null;
+let audioAt = 0;
+
+function openAudio(ticket) {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const sock = new WebSocket(`${scheme}://${location.host}/audio?t=${ticket}`);
+  sock.binaryType = 'arraybuffer';
+  if (!audioCtx) {
+    try {
+      audioCtx = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive' });
+      audioCtx.addEventListener('statechange', soundHint);
+    } catch (e) {
+      sock.close();
+      return;
+    }
+  }
+  sock.addEventListener('open', () => { audioSock = sock; soundHint(); });
+  sock.addEventListener('message', (ev) => playPiece(ev.data));
+  sock.addEventListener('close', () => { if (audioSock === sock) audioSock = null; soundHint(); });
+  sock.addEventListener('error', () => sock.close());
+}
+
+function playPiece(data) {
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const pcm = new Int16Array(data);
+  const frames = pcm.length >> 1;
+  if (!frames) return;
+  const now = audioCtx.currentTime;
+  if (audioAt < now + 0.005) audioAt = now + CUSHION;   // ran dry: refill
+  else if (audioAt > now + MAX_AHEAD) return;           // too far behind
+  const buffer = audioCtx.createBuffer(2, frames, RATE);
+  const left = buffer.getChannelData(0), right = buffer.getChannelData(1);
+  for (let i = 0; i < frames; i++) {
+    left[i] = pcm[2 * i] / 32768;
+    right[i] = pcm[2 * i + 1] / 32768;
+  }
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioCtx.destination);
+  source.start(audioAt);
+  audioAt += frames / RATE;
+}
+
+function soundHint() {
+  const waiting = !!(audioSock && audioCtx && audioCtx.state !== 'running');
+  $('soundhint').hidden = !waiting;
+  $('soundhint').textContent = text('sound', 'Touch the screen to turn on the sound.');
+}
+
+function startSound() {
+  if (audioCtx && audioCtx.state !== 'running') {
+    audioCtx.resume().then(soundHint, () => {});
+  }
 }
 
 function direct() { return inputSock && inputSock.readyState === WebSocket.OPEN; }
@@ -515,6 +581,8 @@ async function stayAwake() {
 }
 
 document.addEventListener('pointerdown', stayAwake, true);
+document.addEventListener('pointerdown', startSound, true);
+document.addEventListener('keydown', startSound, true);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && navigator.userActivation?.hasBeenActive) stayAwake();
 });

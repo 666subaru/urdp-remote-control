@@ -32,6 +32,7 @@ arayüzdür.** FreeRDP kurulu değilse hiçbir şey yapamaz, o yüzden ilk şart
 | **PyQt6** | Arayüz | **Evet** |
 | `libsecret` (`secret-tool`) | Parolayı KDE Cüzdan / GNOME Keyring'de saklamak | Hayır, ama parola kaydetme onsuz çalışmaz |
 | `krfb` (`krfb-virtualmonitor`) | Tablet ekranı (yalnız KDE Plasma Wayland) | Hayır |
+| `pactl`, `parec` (`libpulse` / `pipewire-pulse`) | Tablet ekranı sesi | Hayır |
 
 FreeRDP **3** gerekiyor. FreeRDP 2 birçok seçeneği farklı yazar
 (`/cert-tofu`, `/monitor-list` gibi); uygulama eski bir sürüm bulursa durum
@@ -187,6 +188,13 @@ gereken **tek bir port** vardır (varsayılan 1701).
   yazar; ⌨ düğmesi ekran klavyesini açar, onun metni de aynı dizilimle tuş
   tuş yazılır (xkbcommon). `krfb-virtualmonitor` VNC'den gelen girişi yok saydığı için
   uinput olmadan tablet yalnızca görüntü gösterir.
+- **Ses.** **Ses: Tablette** seçiliyken URDP bir "URDP Tablet" hoparlörü
+  ekler (`pactl` ve `parec` ile PipeWire/PulseAudio boş çıkışı) ve paylaşım
+  sürdükçe onu varsayılan çıkış yapar; tablet gelen sesi çalar (48 kHz
+  stereo, saniyenin onda biri kadar geriden). Tarayıcılar sesi ancak bir
+  dokunuştan sonra başlatır. Paylaşım durunca önceki çıkış yeniden varsayılan
+  olur. Bir program masaüstünün ses ayarlarından yine başka çıkışa
+  yönlendirilebilir.
 - **Ekran açık kalır.** Sayfa görüntünün arkasında küçük, sessiz bir video
   oynatır; Android ekranı karartmaz (Wake Lock API HTTPS ister).
 - **Erişim.** Sayfa dosyaları dışında her şey kod ister. Kod adresin `#`
@@ -311,7 +319,7 @@ Kod düzeni:
 | `theme.py` / `widgets.py` | Karanlık tema ve ortak parçalar |
 | `tab_*.py` | Beş sekme |
 | `mainwindow.py` | Pencere, profil yönetimi, bağlanma akışı |
-| `tablet.py`, `tabletdialog.py`, `web/` | Tablet ekranı: sanal ekran, web sunucusu, sayfa |
+| `tablet.py`, `tabletdialog.py`, `tabletaudio.py`, `web/` | Tablet ekranı: sanal ekran, web sunucusu, ses, sayfa |
 | `qr.py` | Tablet adresi için küçük QR üreticisi |
 
 ## Lisans

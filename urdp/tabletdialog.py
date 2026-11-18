@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout,
                              QLabel, QPushButton, QSpinBox, QVBoxLayout,
                              QWidget)
 
-from . import qr, tablet
+from . import qr, tablet, tabletaudio
 from .i18n import _
 from .widgets import body, hint
 
@@ -70,11 +70,16 @@ class TabletDialog(QDialog):
         self.input_box = QComboBox()
         for value, label in tablet.INPUTS:
             self.input_box.addItem(_(label), value)
+        self.sound_box = QComboBox()
+        for value, label in tablet.SOUNDS:
+            self.sound_box.addItem(_(label), value)
         self.port_box = QSpinBox()
         self.port_box.setRange(1024, 65535)
         form.addRow(_("Position:"), self.position_box)
         form.addRow(_("Size:"), self.size_box)
         form.addRow(_("Input:"), self.input_box)
+        if tabletaudio.available():
+            form.addRow(_("Sound:"), self.sound_box)
         form.addRow(_("Port:"), self.port_box)
         layout.addLayout(form)
 
@@ -116,6 +121,7 @@ class TabletDialog(QDialog):
         self.position_box.currentIndexChanged.connect(self._save)
         self.size_box.currentIndexChanged.connect(self._save)
         self.input_box.currentIndexChanged.connect(self._save)
+        self.sound_box.currentIndexChanged.connect(self._save)
         self.port_box.valueChanged.connect(self._save)
         self.btn_copy.clicked.connect(self._copy)
         self.btn_code.clicked.connect(self._new_code)
@@ -130,6 +136,7 @@ class TabletDialog(QDialog):
         self.position_box.setCurrentIndex(max(0, self.position_box.findData(s.position)))
         self.size_box.setCurrentIndex(max(0, self.size_box.findData(s.size)))
         self.input_box.setCurrentIndex(max(0, self.input_box.findData(s.input)))
+        self.sound_box.setCurrentIndex(max(0, self.sound_box.findData(s.sound)))
         self.port_box.setValue(s.port)
         self._show_address()
 
@@ -138,6 +145,7 @@ class TabletDialog(QDialog):
         s.position = self.position_box.currentData()
         s.size = self.size_box.currentData()
         s.input = self.input_box.currentData()
+        s.sound = self.sound_box.currentData()
         s.port = self.port_box.value()
         tablet.save_settings(s)
         self._show_address()
@@ -185,7 +193,8 @@ class TabletDialog(QDialog):
     def _show_state(self, state: str, detail: str) -> None:
         running = self.screen_.running
         self.btn_start.setText(_("Stop") if running else _("Start"))
-        for widget in (self.position_box, self.size_box, self.port_box):
+        for widget in (self.position_box, self.size_box, self.sound_box,
+                       self.port_box):
             widget.setEnabled(not running)
         # The code is only worth scanning while something answers it.
         for widget in (self.code_image, self.address, self.btn_copy):

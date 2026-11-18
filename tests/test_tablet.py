@@ -177,6 +177,9 @@ class _Owner:
     check_proof = tablet.TabletScreen.check_proof
     new_ticket = tablet.TabletScreen.new_ticket
     use_ticket = tablet.TabletScreen.use_ticket
+    audio_opened = tablet.TabletScreen.audio_opened
+    audio_closed = tablet.TabletScreen.audio_closed
+    _audio_out = tablet.TabletScreen._audio_out
 
     def __init__(self, vnc_port):
         self.vnc_port = vnc_port
@@ -193,6 +196,8 @@ class _Owner:
         self.seen = []
         self.clients = []
         self.has_input = True
+        self.has_audio = True
+        self._audio = None
         self.messages = []
         self.inputs = []
 
@@ -412,10 +417,85 @@ class ServerTest(unittest.TestCase):
                          [b'["t","d",1,0.5,0.5]', b'["p","h",0.1,0.2,0,0,0,0,0]'])
         self.assertEqual(self.owner.inputs, ["open", "closed"])
 
+    def test_audio_channel_sends_the_sound(self):
+        sock, _, head = self._handshake(self._ticket(), "/audio")
+        self.assertIn(" 101 ", head.splitlines()[0])
+        for _ in range(50):
+            if self.owner._audio is not None:
+                break
+            threading.Event().wait(0.02)
+        piece = bytes(range(256)) * 15                  # 20 ms, 3840 bytes
+        self.owner._audio_out(piece)
+        first, length = sock.recv(2)
+        self.assertEqual((first, length), (0x82, 126))
+        size = struct.unpack("!H", sock.recv(2))[0]
+        data = b""
+        while len(data) < size:
+            data += sock.recv(size - len(data))
+        self.assertEqual(data, piece)
+        sock.sendall(bytes([0x88, 0x80]) + b"\0\0\0\0")
+        sock.close()
+        for _ in range(100):
+            if self.owner._audio is None:
+                break
+            threading.Event().wait(0.02)
+        self.assertIsNone(self.owner._audio)
+        self.owner._audio_out(piece)                    # nobody listening
+
+    def test_audio_needs_a_ticket_and_sound(self):
+        sock, _, head = self._handshake("wrong", "/audio")
+        sock.close()
+        self.assertIn(" 403 ", head.splitlines()[0])
+        self.owner.has_audio = False
+        sock, _, head = self._handshake(self._ticket(), "/audio")
+        sock.close()
+        self.assertIn(" 503 ", head.splitlines()[0])
+
     def test_input_channel_needs_a_ticket(self):
         sock, _, head = self._handshake("wrong", "/input")
         sock.close()
         self.assertIn(" 403 ", head.splitlines()[0])
+
+
+class SpeakerTest(unittest.TestCase):
+    def test_finds_its_own_sinks_only(self):
+        from urdp import tabletaudio
+        listing = ("12\tmodule-null-sink\tsink_name=urdp_tablet rate=48000\t\n"
+                   "13\tmodule-null-sink\tsink_name=other\t\n"
+                   "14\tmodule-loopback\tsink_name=urdp_tablet\t\n")
+        with unittest.mock.patch.object(tabletaudio, "_pactl",
+                                        return_value=listing):
+            self.assertEqual(tabletaudio._our_modules(), ["12"])
+
+    def test_gives_the_default_output_back(self):
+        from urdp import tabletaudio
+        calls = []
+
+        def pactl(*args):
+            calls.append(args)
+            return {"get-default-sink": "urdp_tablet"}.get(args[0], "")
+
+        speaker = tabletaudio.Speaker(lambda piece: None)
+        speaker._module, speaker._previous = "42", "speakers"
+        with unittest.mock.patch.object(tabletaudio, "_pactl", pactl):
+            speaker.stop()
+        self.assertEqual(calls, [("get-default-sink",),
+                                 ("set-default-sink", "speakers"),
+                                 ("unload-module", "42")])
+
+    def test_silence_is_not_sent(self):
+        from urdp import tabletaudio
+        got = []
+        speaker = tabletaudio.Speaker(got.append)
+        sound = b"\1\2" * (tabletaudio.CHUNK // 2)
+        data = bytes(tabletaudio.CHUNK) + sound + sound[:100]
+        process = subprocess.Popen(["cat"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE)
+        process.stdin.write(data)
+        process.stdin.close()
+        speaker._read(process)
+        process.wait()
+        self.assertEqual(got, [sound])
 
 
 class _FakeInput:
